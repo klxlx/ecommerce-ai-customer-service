@@ -1,0 +1,72 @@
+{
+  "manifest_version": 2,
+  "status": "legacy",
+  "retired_at": "2026-11-18",
+  "reason": "unverified_source",
+  "sources": [
+    {
+      "uri": "products/earbuds-pro.md",
+      "kb_type": "product",
+      "name": "声动 Pro 无线蓝牙耳机",
+      "legacy": true,
+      "reason": "unverified_source",
+      "checksum": "850a86825c8bd7ff61c7ea050d3047db9ea24849a637cbc2640b241865cfbab7"
+    },
+    {
+      "uri": "products/smart-thermos.md",
+      "kb_type": "product",
+      "name": "恒温智能保温杯",
+      "legacy": true,
+      "reason": "unverified_source",
+      "checksum": "113f5b886425db637d096f81f83150eaae362a9959656c125d062249e0b35f25"
+    },
+    {
+      "uri": "products/power-bank.md",
+      "kb_type": "product",
+      "name": "疾充 10000mAh 便携充电宝",
+      "legacy": true,
+      "reason": "unverified_source",
+      "checksum": "1d9d3a91b29f362e430edc0978507226ea57bce0a0413f25227649d9c894873b"
+    },
+    {
+      "uri": "products/air-purifier.md",
+      "kb_type": "product",
+      "name": "清呼吸 家用空气净化器",
+      "legacy": true,
+      "reason": "unverified_source",
+      "checksum": "4f93f9283c26552679ec257da9161a0137c3ac9f19779d4d099d8864fcbb40b2"
+    },
+    {
+      "uri": "policies/return-policy.md",
+      "kb_type": "policy",
+      "name": "退换货政策",
+      "legacy": true,
+      "reason": "unverified_source",
+      "checksum": "6c7c5af3f1b14b36015383f12e659ea2ac5d90a59128aefb0e9d7f9572653fad"
+    },
+    {
+      "uri": "policies/warranty-policy.md",
+      "kb_type": "policy",
+      "name": "售后与保修政策",
+      "legacy": true,
+      "reason": "unverified_source",
+      "checksum": "65c74263d8e5811c8ba7a15a633b65f53b82b59e2a3ff5e258f51e701134c879"
+    },
+    {
+      "uri": "policies/shipping-policy.md",
+      "kb_type": "policy",
+      "name": "物流与运费规则",
+      "legacy": true,
+      "reason": "unverified_source",
+      "checksum": "c646cea35c5ea9697060c9cb3481bb331237cec2b8b242452e6157389c15e28c"
+    },
+    {
+      "uri": "policies/dispute-policy.md",
+      "kb_type": "policy",
+      "name": "交易纠纷处理规则",
+      "legacy": true,
+      "reason": "unverified_source",
+      "checksum": "2b6fab5788edc5eee23961217734818138a41c77cf0d2c96d5297097708fbecf"
+    }
+  ]
+}

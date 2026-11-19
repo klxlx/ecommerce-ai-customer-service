@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Playwright
+frontend/test-results/
+frontend/playwright-report/
+frontend/.playwright/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Docker
+*.log
+
+# Local archive pending deletion review
+待确认归档/
+
+# Local acceptance artifacts (contain embedded PostgreSQL data dirs, ~800MB)
+artifacts/
+
+# Windows PowerShell redirection leftover (empty file)
+$null
+
+# Large binary knowledge sources (130MB PDFs) kept out of git history
+电商知识库文档/

@@ -1,0 +1,117 @@
+{
+  "registry_version": 1,
+  "pdf_root": "电商知识库文档",
+  "generated_at": "2026-11-18",
+  "sources": [
+    {
+      "source_id": "huawei-mate-80-pro-max-sgt-al10",
+      "file_name": "HUAWEI Mate 80 Pro Max 用户指南-(SGT-AL10,HarmonyOS 6_02,zh-cn).pdf",
+      "title": "HUAWEI Mate 80 Pro Max 用户指南",
+      "kb_type": "product",
+      "applicability": "HUAWEI Mate 80 Pro Max（SGT-AL10，HarmonyOS 6.02）",
+      "extraction_strategy": "huawei_outline",
+      "page_count": 415,
+      "effective_date": null,
+      "checksum": "77f18355c59cf4c24f6d96c10df715c1aab36dbe88720e04baeed71baa2b8d5f"
+    },
+    {
+      "source_id": "huawei-mate-90-series-hls-al00-cms-al20",
+      "file_name": "HUAWEI Mate 90 & Mate 90 Pro 用户指南-(HLS-AL00&CMS-AL20,HarmonyOS 7.0_01,zh-cn).pdf",
+      "title": "HUAWEI Mate 90 & Mate 90 Pro 用户指南",
+      "kb_type": "product",
+      "applicability": "HUAWEI Mate 90（HLS-AL00）及 Mate 90 Pro（CMS-AL20，HarmonyOS 7.0.01）",
+      "extraction_strategy": "huawei_outline",
+      "page_count": 427,
+      "effective_date": null,
+      "checksum": "c5170fc68410185919d0758096ed71d1e4acb4d0e206402be7fc646bf05adb2a"
+    },
+    {
+      "source_id": "huawei-pura-70-pro-hbn-al00",
+      "file_name": "HUAWEI Pura 70 Pro 用户指南-(HBN-AL00,HarmonyOS 5.0_01,zh-cn).pdf",
+      "title": "HUAWEI Pura 70 Pro 用户指南",
+      "kb_type": "product",
+      "applicability": "HUAWEI Pura 70 Pro（HBN-AL00，HarmonyOS 5.0.01）",
+      "extraction_strategy": "huawei_outline",
+      "page_count": 148,
+      "effective_date": null,
+      "checksum": "69746afad2889fd8d1d96d384d47bdb9934f10d48764f910657acceb3aedbae1"
+    },
+    {
+      "source_id": "huawei-pura-70-ultra-hbp-al00",
+      "file_name": "HUAWEI Pura 70 Ultra 用户指南-(HBP-AL00,HarmonyOS 4.2_01,zh-cn).pdf",
+      "title": "HUAWEI Pura 70 Ultra 用户指南",
+      "kb_type": "product",
+      "applicability": "HUAWEI Pura 70 Ultra（HBP-AL00，HarmonyOS 4.2.01）",
+      "extraction_strategy": "huawei_outline",
+      "page_count": 269,
+      "effective_date": null,
+      "checksum": "afb17efae6b234f6c90a2be8fd7b16c42298e37dc7f66d2b2eaa897a647b0513"
+    },
+    {
+      "source_id": "huawei-pura-70-ady-al00-al10",
+      "file_name": "HUAWEI Pura 70 用户指南-(ADY-AL00&AL10,HarmonyOS 5.0_01,zh-cn).pdf",
+      "title": "HUAWEI Pura 70 用户指南",
+      "kb_type": "product",
+      "applicability": "HUAWEI Pura 70（ADY-AL00、ADY-AL10，HarmonyOS 5.0.01）",
+      "extraction_strategy": "huawei_outline",
+      "page_count": 148,
+      "effective_date": null,
+      "checksum": "0551cbab373787d8b7d7657e09394e2ecaf4a2578b9ef69d92c5ce7daa19212f"
+    },
+    {
+      "source_id": "huawei-pura-80-ultra-lmr-al10",
+      "file_name": "HUAWEI Pura 80 Ultra 用户指南-(LMR-AL10,HarmonyOS 5.1_01,zh-cn).pdf",
+      "title": "HUAWEI Pura 80 Ultra 用户指南",
+      "kb_type": "product",
+      "applicability": "HUAWEI Pura 80 Ultra（LMR-AL10，HarmonyOS 5.1.01）",
+      "extraction_strategy": "huawei_outline",
+      "page_count": 255,
+      "effective_date": null,
+      "checksum": "e84af7ab4fb72d483707f8bc3bc87dcd20bc648d0a493d42c38103ad9737f3a4"
+    },
+    {
+      "source_id": "jd-seven-day-no-reason-return",
+      "file_name": "京东开放平台7天无理由退货规则.pdf",
+      "title": "京东开放平台7天无理由退货规则",
+      "kb_type": "policy",
+      "applicability": "京东开放平台7天无理由退货规则",
+      "extraction_strategy": "jd_clauses",
+      "page_count": 6,
+      "effective_date": "2024-05-08",
+      "checksum": "16a74acadaea2f1fbabbecac14ca116df6a11cd00d1b8d11a8f2a6134a0a2190"
+    },
+    {
+      "source_id": "jd-after-sales-management",
+      "file_name": "京东开放平台售后服务管理规则.pdf",
+      "title": "京东开放平台售后服务管理规则",
+      "kb_type": "policy",
+      "applicability": "京东开放平台售后服务管理规则",
+      "extraction_strategy": "jd_clauses",
+      "page_count": 6,
+      "effective_date": "2026-05-07",
+      "checksum": "8b841721d204c72c261a2d8e733c04c27997cf6424866e316424bc910c380344"
+    },
+    {
+      "source_id": "jd-product-dispute-handling",
+      "file_name": "京东开放平台商品类问题纠纷处理标准.pdf",
+      "title": "京东开放平台商品类问题纠纷处理标准",
+      "kb_type": "policy",
+      "applicability": "京东开放平台商品类问题纠纷处理标准",
+      "extraction_strategy": "jd_clauses",
+      "page_count": 21,
+      "effective_date": "2026-10-19",
+      "checksum": "4f6cefd0e0d612bf72c032bd926bdd11047db9c90d6397f42a86ebb829ccdd47"
+    },
+    {
+      "source_id": "jd-lightning-refund",
+      "file_name": "京东开放平台闪电退款服务规则.pdf",
+      "title": "京东开放平台闪电退款服务规则",
+      "kb_type": "policy",
+      "applicability": "京东开放平台闪电退款服务规则",
+      "extraction_strategy": "jd_clauses",
+      "page_count": 2,
+      "effective_date": "2024-12-26",
+      "checksum": "a0b09ee9c5fa0841838c2ec8f6078b99360adc725d7fffbc518329d83b0e0ee2"
+    }
+  ]
+}
