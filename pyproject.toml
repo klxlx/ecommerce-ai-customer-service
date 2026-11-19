@@ -1,0 +1,42 @@
+[project]
+name = "ecommerce-customer-service"
+version = "0.1.0"
+description = "Parent-child RAG + SQL-backed e-commerce customer service system"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic",
+    "pydantic-settings",
+    "sqlalchemy[asyncio]",
+    "alembic",
+    "psycopg[binary]",
+    "pgvector",
+    "langchain",
+    "langchain-core",
+    "langgraph",
+    "langchain-openai",
+    "httpx",
+    "python-multipart",
+    "pypdf",
+    "python-docx",
+    "pillow",
+    "pymupdf>=1.28.2,<2",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "pytest-asyncio",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
