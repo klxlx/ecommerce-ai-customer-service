@@ -1,4 +1,4 @@
-import { apiFetch } from "./client";
+import { apiFetch, ApiError, getToken } from "./client";
 
 export interface Conversation {
   id: number;
@@ -96,4 +96,90 @@ export async function sendMessage(
     `/api/conversations/${conversationId}/messages`,
     { method: "POST", body: JSON.stringify({ content }) },
   );
+}
+
+/**
+ * Stream one assistant turn over SSE. Resolves with the final persisted
+ * response once the server emits the `done` event.
+ */
+export async function sendMessageStream(
+  conversationId: number,
+  content: string,
+  onToken: (text: string) => void,
+  signal?: AbortSignal,
+): Promise<ChatResponse> {
+  const token = getToken();
+  const headers = new Headers({ "Content-Type": "application/json" });
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+
+  const resp = await fetch(
+    `/api/conversations/${conversationId}/messages/stream`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ content }),
+      signal,
+    },
+  );
+
+  if (!resp.ok) {
+    const data = await resp.json().catch(() => ({}));
+    throw new ApiError(resp.status, data.detail || "请求失败");
+  }
+  if (!resp.body) {
+    throw new ApiError(0, "浏览器不支持流式响应");
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let completed: ChatResponse | null = null;
+
+  function consumeEvent(block: string): void {
+    const lines = block.split("\n");
+    let event = "message";
+    const dataLines: string[] = [];
+    for (const line of lines) {
+      if (line.startsWith("event:")) {
+        event = line.slice(6).trim();
+      } else if (line.startsWith("data:")) {
+        dataLines.push(line.slice(5).trimStart());
+      }
+    }
+    if (dataLines.length === 0) return;
+    let data: unknown;
+    try {
+      data = JSON.parse(dataLines.join("\n"));
+    } catch {
+      return;
+    }
+    if (event === "token") {
+      const text = (data as { text?: string }).text;
+      if (text) onToken(text);
+    } else if (event === "done") {
+      completed = data as ChatResponse;
+    } else if (event === "error") {
+      throw new ApiError(
+        0,
+        (data as { detail?: string }).detail || "回复生成失败，请稍后重试",
+      );
+    }
+  }
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+    const blocks = buffer.split("\n\n");
+    buffer = blocks.pop() ?? "";
+    for (const block of blocks) {
+      if (block.trim()) consumeEvent(block);
+    }
+  }
+
+  if (buffer.trim()) consumeEvent(buffer);
+  if (completed) return completed;
+  throw new ApiError(0, "流式响应中断，请重试");
 }

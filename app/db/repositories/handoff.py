@@ -19,11 +19,13 @@ async def create_handoff(
     recent_messages: list,
     evidence: dict,
     status: str = "open",
+    kind: str = "human",
 ) -> HandoffTicket:
     ticket = HandoffTicket(
         conversation_id=conversation_id,
         user_id=user_id,
         status=status,
+        kind=kind,
         summary=summary,
         slots=slots,
         recent_messages=recent_messages,
@@ -57,6 +59,7 @@ async def get_active_for_conversation(
         select(HandoffTicket)
         .where(
             HandoffTicket.conversation_id == conversation_id,
+            HandoffTicket.kind == "human",
             HandoffTicket.status.in_(("open", "in_progress")),
         )
         .order_by(HandoffTicket.created_at.desc(), HandoffTicket.id.desc())
@@ -79,7 +82,10 @@ async def list_active(session: AsyncSession) -> list[HandoffTicket]:
     """Return tickets that still need a human: waiting or being handled."""
     result = await session.execute(
         select(HandoffTicket)
-        .where(HandoffTicket.status.in_(("open", "in_progress")))
+        .where(
+            HandoffTicket.kind == "human",
+            HandoffTicket.status.in_(("open", "in_progress")),
+        )
         .order_by(HandoffTicket.created_at.asc())
     )
     return list(result.scalars().all())
@@ -97,6 +103,7 @@ async def claim(
         update(HandoffTicket)
         .where(
             HandoffTicket.id == handoff_id,
+            HandoffTicket.kind == "human",
             or_(
                 HandoffTicket.status == "open",
                 and_(

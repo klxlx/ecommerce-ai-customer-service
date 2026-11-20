@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Protocol
 
 from openai import (
@@ -40,6 +41,12 @@ class ChatProvider(Protocol):
         messages: list[dict],
         model: str | None = None,
     ) -> str: ...
+
+    def stream(
+        self,
+        messages: list[dict],
+        model: str | None = None,
+    ) -> AsyncIterator[str]: ...
 
 
 class OpenAICompatChat:
@@ -106,6 +113,32 @@ class OpenAICompatChat:
             policy=self._policy,
             metrics=self._metrics,
         )
+
+    async def stream(
+        self,
+        messages: list[dict],
+        model: str | None = None,
+    ) -> AsyncIterator[str]:
+        """Yield content deltas from the provider's streaming endpoint."""
+        if not self._configured:
+            raise ProviderAuthenticationError(
+                "chat", "CHAT_API_KEY is not configured"
+            )
+        try:
+            stream = await self._client.chat.completions.create(
+                model=model or self._model,
+                messages=messages,
+                temperature=0.2,
+                stream=True,
+            )
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    yield delta
+        except OpenAIError as exc:
+            raise _map_openai_error(exc) from exc
 
 
 def _map_openai_error(error: OpenAIError) -> ProviderError:

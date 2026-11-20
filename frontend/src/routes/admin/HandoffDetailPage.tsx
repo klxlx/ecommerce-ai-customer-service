@@ -80,6 +80,9 @@ export function HandoffDetailPage() {
             <span className={`pill pill-${ticket.status}`}>
               {STATUS_LABEL[ticket.status] || ticket.status}
             </span>
+            {ticket.kind === "knowledge_gap" && (
+              <span className="knowledge-gap-tag">知识缺口</span>
+            )}
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <button

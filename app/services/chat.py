@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from time import perf_counter
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +17,9 @@ from app.schemas.chat import ChatResponse
 from app.services import handoff as handoff_service
 
 DEFAULT_CONVERSATION_TITLE = "智能客服"
+NEW_CONVERSATION_GREETING = (
+    "你好呀！我是你的智能客服小天，请问有什么能够帮到你的？"
+)
 PROVIDER_FAILURE_ANSWER = (
     "抱歉，智能客服暂时不可用，已为您转接人工客服，请稍候。"
 )
@@ -45,6 +49,7 @@ async def run_chat(
     message: str,
     *,
     metrics: MetricsRegistry | None = None,
+    token_sink: Callable[[str], Awaitable[None]] | None = None,
 ) -> ChatResponse | None:
     """Run one assistant turn for ``message`` in an owned conversation."""
     conversation = await chat_repo.get_conversation_owned(
@@ -100,6 +105,7 @@ async def run_chat(
         "agents": container.agents,
         "weather": container.weather,
         "local_time": container.local_time,
+        "stream": token_sink,
     }
 
     graph = build_graph(container)
@@ -160,14 +166,18 @@ async def _persist_result(
     )
 
     # Persist the agent run trace.
+    is_knowledge_gap = intent == "knowledge_gap"
     trace = {
         "intent": intent,
         "slots": slots,
         "sources": sources,
         "tool_evidence": tool_evidence,
         "handoff_reason": (
-            handoff_payload.get("reason") if handoff_payload else None
+            None
+            if is_knowledge_gap
+            else handoff_payload.get("reason") if handoff_payload else None
         ),
+        "knowledge_gap": is_knowledge_gap,
     }
     agent_run = await chat_repo.create_agent_run(session, conversation.id, intent, trace)
     await chat_repo.create_tool_call_log(
@@ -209,12 +219,15 @@ async def _persist_result(
             slots=handoff_payload.get("slots", {}),
             recent_messages=[{"role": "user", "content": message}],
             evidence=handoff_payload.get("evidence", {}),
+            kind="knowledge_gap" if is_knowledge_gap else "human",
         )
-        handoff_out = {
-            "id": ticket.id,
-            "status": ticket.status,
-            "reason": handoff_payload.get("reason", ""),
-        }
+        handoff_out = None
+        if not is_knowledge_gap:
+            handoff_out = {
+                "id": ticket.id,
+                "status": ticket.status,
+                "reason": handoff_payload.get("reason", ""),
+            }
 
     await session.commit()
 
@@ -296,6 +309,8 @@ def _record_turn_metrics(metrics: MetricsRegistry, result: dict) -> None:
             "handoff.created.total",
             reason=_handoff_reason(handoff, evidence),
         )
+        if intent == "knowledge_gap":
+            metrics.increment("knowledge_gap.created.total")
 
 
 def _tool_outcome(
@@ -306,7 +321,7 @@ def _tool_outcome(
     if isinstance(after_sale_context, dict):
         if after_sale_context.get("status") == "query_error":
             return "failure"
-    if intent == "handoff" and evidence and "provider_failure" not in evidence:
+    if intent in ("handoff", "knowledge_gap") and evidence and "provider_failure" not in evidence:
         return "failure"
     return "success"
 

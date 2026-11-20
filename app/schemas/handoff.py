@@ -49,6 +49,7 @@ class HandoffTicketOut(BaseModel):
     conversation_id: int
     user_id: int
     status: str
+    kind: str = "human"
     summary: str
     slots: dict = Field(default_factory=dict)
     recent_messages: list = Field(default_factory=list)

@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_container, get_current_user, rate_limit_chat
@@ -18,6 +23,7 @@ from app.schemas.chat import (
 )
 from app.services import chat as chat_service
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -31,6 +37,12 @@ async def create_conversation(
         session,
         user.id,
         title=payload.title or chat_service.DEFAULT_CONVERSATION_TITLE,
+    )
+    await chat_repo.add_message(
+        session,
+        conversation.id,
+        "assistant",
+        chat_service.NEW_CONVERSATION_GREETING,
     )
     await session.commit()
     return ConversationOut.model_validate(conversation)
@@ -77,6 +89,96 @@ async def list_messages(
         raise HTTPException(status_code=404, detail="会话不存在")
     messages = await chat_repo.list_messages(session, conversation_id)
     return [ChatMessageOut.model_validate(m) for m in messages]
+
+
+@router.post("/conversations/{conversation_id}/messages/stream")
+async def stream_message(
+    conversation_id: int,
+    payload: MessageCreate,
+    request: Request,
+    user: User = Depends(rate_limit_chat),
+    session: AsyncSession = Depends(get_session),
+    container=Depends(get_container),
+):
+    conversation = await chat_repo.get_conversation_owned(
+        session, conversation_id, user.id
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    async def event_stream():
+        queue: asyncio.Queue[str] = asyncio.Queue()
+        streamed = False
+
+        async def emit_token(text: str) -> None:
+            nonlocal streamed
+            if not text:
+                return
+            streamed = True
+            await queue.put(text)
+
+        task = asyncio.create_task(
+            chat_service.run_chat(
+                session,
+                user,
+                container,
+                conversation_id,
+                payload.content,
+                metrics=request.app.state.metrics,
+                token_sink=emit_token,
+            )
+        )
+        try:
+            while True:
+                if task.done() and queue.empty():
+                    break
+                try:
+                    token = await asyncio.wait_for(queue.get(), timeout=0.05)
+                except asyncio.TimeoutError:
+                    continue
+                yield _sse("token", {"text": token})
+
+            result = await task
+            if result is None:
+                yield _sse("error", {"detail": "会话不存在"})
+                return
+
+            # Tools and fixed templates return a complete string; replay it in
+            # small chunks so the customer still sees a typing effect.
+            if not streamed:
+                for chunk in _answer_chunks(result.answer):
+                    yield _sse("token", {"text": chunk})
+                    await asyncio.sleep(0.012)
+
+            yield _sse("done", result.model_dump(mode="json"))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("streaming chat turn failed")
+            yield _sse("error", {"detail": "回复生成失败，请稍后重试"})
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _sse(event: str, payload: dict) -> str:
+    data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return f"event: {event}\ndata: {data}\n\n"
+
+
+def _answer_chunks(text: str, size: int = 3):
+    for index in range(0, len(text), size):
+        yield text[index : index + size]
 
 
 @router.post("/conversations/{conversation_id}/messages", response_model=ChatResponse)
