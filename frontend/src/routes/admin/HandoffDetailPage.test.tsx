@@ -3,26 +3,17 @@ import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Route, Routes } from "react-router-dom";
 import { renderWithProviders } from "../../test/render";
-import {
-  getHandoff,
-  listHandoffMessages,
-  sendHandoffReply,
-  type HandoffTicket,
-} from "../../api/admin";
+import { getHandoff, updateHandoffStatus, type HandoffTicket } from "../../api/admin";
 import { HandoffDetailPage } from "./HandoffDetailPage";
 
 vi.mock("../../api/admin", () => ({
   getHandoff: vi.fn(),
-  listHandoffMessages: vi.fn(),
-  sendHandoffReply: vi.fn(),
   updateHandoffStatus: vi.fn(),
 }));
 
 const mockedGetHandoff = getHandoff as unknown as ReturnType<typeof vi.fn>;
-const mockedListHandoffMessages =
-  listHandoffMessages as unknown as ReturnType<typeof vi.fn>;
-const mockedSendHandoffReply =
-  sendHandoffReply as unknown as ReturnType<typeof vi.fn>;
+const mockedUpdateHandoffStatus =
+  updateHandoffStatus as unknown as ReturnType<typeof vi.fn>;
 
 function ticket(overrides: Partial<HandoffTicket> = {}): HandoffTicket {
   return {
@@ -67,7 +58,6 @@ function ticket(overrides: Partial<HandoffTicket> = {}): HandoffTicket {
 describe("HandoffDetailPage after-sale context", () => {
   it("renders only safe order, after-sale and threshold facts", async () => {
     mockedGetHandoff.mockResolvedValue(ticket());
-    mockedListHandoffMessages.mockResolvedValue([]);
 
     renderWithProviders(
       <Routes>
@@ -98,7 +88,6 @@ describe("HandoffDetailPage after-sale context", () => {
         evidence: { sources: [], tool: {} },
       }),
     );
-    mockedListHandoffMessages.mockResolvedValue([]);
 
     renderWithProviders(
       <Routes>
@@ -112,26 +101,11 @@ describe("HandoffDetailPage after-sale context", () => {
     ).toBeInTheDocument();
   });
 
-  it("sends an admin reply and returns the conversation to the agent", async () => {
-    mockedGetHandoff.mockResolvedValue(ticket({ status: "in_progress" }));
-    mockedListHandoffMessages.mockResolvedValue([
-      {
-        id: 1,
-        role: "user",
-        content: "可以便宜一点吗？",
-        intent: null,
-        sources: null,
-        created_at: "2026-11-11T10:20:00Z",
-      },
-    ]);
-    mockedSendHandoffReply.mockResolvedValue({
-      id: 2,
-      role: "admin",
-      content: "可以为您申请 20 元优惠券。",
-      intent: null,
-      sources: null,
-      created_at: "2026-11-11T10:21:00Z",
-    });
+  it("updates ticket status without hosting a reply box", async () => {
+    mockedGetHandoff.mockResolvedValue(ticket({ status: "open" }));
+    mockedUpdateHandoffStatus.mockResolvedValue(
+      ticket({ status: "in_progress" }),
+    );
 
     renderWithProviders(
       <Routes>
@@ -140,21 +114,15 @@ describe("HandoffDetailPage after-sale context", () => {
       { initialEntries: ["/admin/handoffs/7"] },
     );
 
-    expect(await screen.findByText("可以便宜一点吗？")).toBeInTheDocument();
-    await userEvent.type(
-      screen.getByLabelText("人工回复"),
-      "可以为您申请 20 元优惠券。",
-    );
-    await userEvent.click(
-      screen.getByRole("button", { name: "发送并交回智能体" }),
-    );
+    const markButton = await screen.findByRole("button", {
+      name: "标记处理中",
+    });
+    await userEvent.click(markButton);
 
-    expect(mockedSendHandoffReply).toHaveBeenCalledWith(
-      7,
-      "可以为您申请 20 元优惠券。",
-    );
+    expect(mockedUpdateHandoffStatus).toHaveBeenCalledWith(7, "in_progress");
+    expect(screen.queryByLabelText("人工回复")).not.toBeInTheDocument();
     expect(
-      await screen.findByText("已发送，会话已自动交回智能体"),
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: "发送回复" }),
+    ).not.toBeInTheDocument();
   });
 });

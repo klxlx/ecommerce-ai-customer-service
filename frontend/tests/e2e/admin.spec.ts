@@ -87,14 +87,26 @@ test.describe("admin console", () => {
     await expect(
       page.getByRole("heading", { name: `工单 #${handoff!.id}` }),
     ).toBeVisible();
+    await expect(page.getByLabel("人工回复")).toHaveCount(0);
 
     const adminReply = `人工客服已收到，请放心。${Date.now()}`;
-    await page.getByLabel("人工回复").fill(adminReply);
-    await page.getByRole("button", { name: "发送并交回智能体" }).click();
+    await page.goto("/admin/live");
     await expect(
-      page.getByText("已发送，会话已自动交回智能体"),
+      page.getByRole("heading", { name: "客服回复" }),
     ).toBeVisible();
-    await expect(page.locator(".pill-resolved")).toHaveText("已解决");
+    await page.locator(".cs-session").first().click();
+    await page.getByRole("button", { name: "接入会话" }).click();
+    await page
+      .getByPlaceholder("以人工客服身份回复顾客…")
+      .fill(adminReply);
+    await page.getByRole("button", { name: "发送" }).click();
+    await expect(page.getByTestId("chat-messages")).toContainText(adminReply);
+    await page.getByRole("button", { name: "退出会话" }).click();
+    await page.getByPlaceholder("例如：").fill("已核实并答复，交还智能体。");
+    await page.getByRole("button", { name: "确认解决并交还" }).click();
+    await expect(
+      page.getByText("已退出会话，已交还智能体。"),
+    ).toBeVisible();
 
     await page.evaluate(() => localStorage.clear());
     await login(page, "customer");

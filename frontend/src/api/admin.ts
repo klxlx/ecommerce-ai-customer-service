@@ -42,8 +42,31 @@ export interface HandoffTicket {
   slots: Record<string, unknown>;
   recent_messages: { role: string; content: string }[];
   evidence: HandoffEvidence;
+  assignee_id?: number | null;
+  claimed_at?: string | null;
+  resolved_at?: string | null;
+  close_reason?: string;
+  resolution_note?: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface HandoffLiveSession {
+  id: number;
+  conversation_id: number;
+  user_id: number;
+  username: string;
+  status: "open" | "in_progress";
+  assignee_id: number | null;
+  assignee_name: string;
+  summary: string;
+  created_at: string;
+  claimed_at: string | null;
+  waiting_seconds: number;
+  last_message: string;
+  last_message_role: string;
+  last_message_at: string | null;
+  message_count: number;
 }
 
 export type KnowledgeType = "product" | "policy";
@@ -192,6 +215,26 @@ export async function listHandoffs(
   return apiFetch<HandoffTicket[]>(`/api/admin/handoffs${query}`);
 }
 
+export async function listLiveSessions(): Promise<HandoffLiveSession[]> {
+  return apiFetch<HandoffLiveSession[]>("/api/admin/handoffs/live");
+}
+
+export async function claimHandoff(id: number): Promise<HandoffTicket> {
+  return apiFetch<HandoffTicket>(`/api/admin/handoffs/${id}/claim`, {
+    method: "POST",
+  });
+}
+
+export async function releaseHandoff(
+  id: number,
+  note: string,
+): Promise<HandoffTicket> {
+  return apiFetch<HandoffTicket>(`/api/admin/handoffs/${id}/release`, {
+    method: "POST",
+    body: JSON.stringify({ note }),
+  });
+}
+
 export async function getHandoff(id: number): Promise<HandoffTicket> {
   return apiFetch<HandoffTicket>(`/api/admin/handoffs/${id}`);
 }
@@ -208,8 +251,10 @@ export async function updateHandoffStatus(
 
 export async function listHandoffMessages(
   id: number,
+  afterId?: number,
 ): Promise<ChatMessage[]> {
-  return apiFetch<ChatMessage[]>(`/api/admin/handoffs/${id}/messages`);
+  const query = afterId ? `?after_id=${afterId}` : "";
+  return apiFetch<ChatMessage[]>(`/api/admin/handoffs/${id}/messages${query}`);
 }
 
 export async function sendHandoffReply(

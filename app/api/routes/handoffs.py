@@ -1,4 +1,4 @@
-"""Administrator handoff queue routes."""
+"""Administrator handoff queue and live human-agent console routes."""
 
 from __future__ import annotations
 
@@ -10,6 +10,8 @@ from app.db.models import User
 from app.db.session import get_session
 from app.schemas.chat import ChatMessageOut
 from app.schemas.handoff import (
+    HandoffLiveSessionOut,
+    HandoffReleaseRequest,
     HandoffReplyCreate,
     HandoffTicketOut,
     HandoffUpdate,
@@ -17,6 +19,15 @@ from app.schemas.handoff import (
 from app.services import handoff as handoff_service
 
 router = APIRouter()
+
+
+@router.get("/handoffs/live", response_model=list[HandoffLiveSessionOut])
+async def list_live_sessions(
+    _admin: User = Depends(rate_limit_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Active sessions for the human-agent console (open + in_progress)."""
+    return await handoff_service.live_sessions(session)
 
 
 @router.get("/handoffs", response_model=list[HandoffTicketOut])
@@ -41,6 +52,27 @@ async def get_handoff(
     return HandoffTicketOut.model_validate(ticket)
 
 
+@router.post("/handoffs/{handoff_id}/claim", response_model=HandoffTicketOut)
+async def claim_handoff(
+    handoff_id: int,
+    admin: User = Depends(rate_limit_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Take ownership of a waiting ticket; only one administrator can win."""
+    try:
+        ticket = await handoff_service.claim(session, handoff_id, admin)
+    except handoff_service.HandoffNotFound:
+        raise HTTPException(status_code=404, detail="工单不存在") from None
+    except handoff_service.HandoffConflict as exc:
+        name = exc.assignee_name or "其他客服"
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"该会话已由 {name} 接入",
+        ) from None
+    await session.commit()
+    return HandoffTicketOut.model_validate(ticket)
+
+
 @router.patch("/handoffs/{handoff_id}", response_model=HandoffTicketOut)
 async def update_handoff(
     handoff_id: int,
@@ -61,10 +93,11 @@ async def update_handoff(
 )
 async def list_handoff_messages(
     handoff_id: int,
+    after_id: int | None = Query(default=None, ge=0),
     _admin: User = Depends(rate_limit_admin),
     session: AsyncSession = Depends(get_session),
 ):
-    messages = await handoff_service.list_messages(session, handoff_id)
+    messages = await handoff_service.list_messages(session, handoff_id, after_id)
     if messages is None:
         raise HTTPException(status_code=404, detail="工单不存在")
     return [ChatMessageOut.model_validate(message) for message in messages]
@@ -77,14 +110,49 @@ async def list_handoff_messages(
 async def reply_to_handoff(
     handoff_id: int,
     payload: HandoffReplyCreate,
-    _admin: User = Depends(rate_limit_admin),
+    admin: User = Depends(rate_limit_admin),
     session: AsyncSession = Depends(get_session),
 ):
-    result = await handoff_service.reply_and_return_to_agent(
-        session, handoff_id, payload.content
-    )
-    if result is None:
-        raise HTTPException(status_code=404, detail="工单不存在")
-    message, _ticket = result
+    """Send a reply while keeping the session open for more messages."""
+    try:
+        message = await handoff_service.reply(
+            session, handoff_id, admin, payload.content
+        )
+    except handoff_service.HandoffNotFound:
+        raise HTTPException(status_code=404, detail="工单不存在") from None
+    except handoff_service.HandoffConflict as exc:
+        name = exc.assignee_name or "其他客服"
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"该会话已由 {name} 接入",
+        ) from None
+    except handoff_service.HandoffForbidden:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="该会话当前不由你接待",
+        ) from None
     await session.commit()
     return ChatMessageOut.model_validate(message)
+
+
+@router.post("/handoffs/{handoff_id}/release", response_model=HandoffTicketOut)
+async def release_handoff(
+    handoff_id: int,
+    payload: HandoffReleaseRequest,
+    admin: User = Depends(rate_limit_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    """Close the session, record the conclusion, and return to the agent."""
+    try:
+        ticket = await handoff_service.release(
+            session, handoff_id, admin, payload.note
+        )
+    except handoff_service.HandoffNotFound:
+        raise HTTPException(status_code=404, detail="工单不存在") from None
+    except handoff_service.HandoffForbidden:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="该会话当前不由你接待",
+        ) from None
+    await session.commit()
+    return HandoffTicketOut.model_validate(ticket)

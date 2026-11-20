@@ -200,7 +200,20 @@ async def test_admin_reply_returns_conversation_to_agent(db_session, client):
     assert reply.json()["content"] == "可以为您申请一张 20 元优惠券。"
 
     await db_session.refresh(ticket)
+    assert ticket.status == "in_progress"
+    assert ticket.assignee_id == admin.id
+
+    release = await client.post(
+        f"/api/admin/handoffs/{ticket.id}/release",
+        json={"note": "已发放 20 元优惠券，顾客接受。"},
+        headers=_auth(token),
+    )
+    assert release.status_code == 200
+    await db_session.refresh(ticket)
     assert ticket.status == "resolved"
+    assert ticket.close_reason == "returned_to_agent"
+    assert ticket.resolution_note == "已发放 20 元优惠券，顾客接受。"
+
     runs = (
         await db_session.execute(
             select(AgentRun).where(
@@ -263,6 +276,13 @@ async def test_manual_handoff_pauses_agent_until_admin_replies(
             headers=_auth(admin_token),
         )
         assert reply.status_code == 200
+
+        release = await api.post(
+            f"/api/admin/handoffs/{ticket.id}/release",
+            json={"note": "已核实订单，交还智能体继续跟进。"},
+            headers=_auth(admin_token),
+        )
+        assert release.status_code == 200
 
         after_reply = await api.post(
             f"/api/conversations/{ticket.conversation_id}/messages",

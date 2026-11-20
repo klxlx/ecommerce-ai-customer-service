@@ -446,6 +446,23 @@ class HandoffTicket(Base, TimestampMixin):
     slots: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     recent_messages: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     evidence: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    # Human-agent console: a ticket is claimed by exactly one administrator.
+    assignee_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    claimed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # returned_to_agent | resolved_by_agent | timeout
+    close_reason: Mapped[str] = mapped_column(
+        String(24), default="", server_default="", nullable=False
+    )
+    resolution_note: Mapped[str] = mapped_column(
+        Text, default="", server_default="", nullable=False
+    )
 
 
 # Vector index for child-chunk similarity search.

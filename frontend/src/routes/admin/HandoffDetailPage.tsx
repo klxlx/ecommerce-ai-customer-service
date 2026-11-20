@@ -1,14 +1,8 @@
-import { Fragment, useState } from "react";
+import { Fragment } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Send } from "lucide-react";
-import {
-  getHandoff,
-  listHandoffMessages,
-  sendHandoffReply,
-  updateHandoffStatus,
-} from "../../api/admin";
-import type { ChatMessage } from "../../api/chat";
+import { ArrowLeft } from "lucide-react";
+import { getHandoff, updateHandoffStatus } from "../../api/admin";
 import {
   readSafeAfterSaleEvidence,
   type SafeAfterSaleEvidence,
@@ -25,24 +19,11 @@ export function HandoffDetailPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const handoffId = Number(id);
-  const [reply, setReply] = useState("");
-  const [replyNotice, setReplyNotice] = useState("");
 
   const { data: ticket, isLoading, error } = useQuery({
     queryKey: ["admin", "handoff", handoffId],
     queryFn: () => getHandoff(handoffId),
     enabled: !Number.isNaN(handoffId),
-  });
-
-  const {
-    data: messages,
-    isLoading: messagesLoading,
-    error: messagesError,
-  } = useQuery({
-    queryKey: ["admin", "handoff", handoffId, "messages"],
-    queryFn: () => listHandoffMessages(handoffId),
-    enabled: !Number.isNaN(handoffId),
-    refetchInterval: 3000,
   });
 
   const updateMutation = useMutation({
@@ -52,28 +33,6 @@ export function HandoffDetailPage() {
         queryKey: ["admin", "handoff", handoffId],
       });
       queryClient.invalidateQueries({ queryKey: ["admin", "handoffs"] });
-    },
-  });
-
-  const replyMutation = useMutation({
-    mutationFn: (content: string) => sendHandoffReply(handoffId, content),
-    onMutate: () => {
-      setReplyNotice("");
-    },
-    onSuccess: (message) => {
-      queryClient.setQueryData(
-        ["admin", "handoff", handoffId, "messages"],
-        (current: ChatMessage[] | undefined) => [
-          ...(current || []),
-          message,
-        ],
-      );
-      queryClient.invalidateQueries({
-        queryKey: ["admin", "handoff", handoffId],
-      });
-      queryClient.invalidateQueries({ queryKey: ["admin", "handoffs"] });
-      setReply("");
-      setReplyNotice("已发送，会话已自动交回智能体");
     },
   });
 
@@ -125,20 +84,30 @@ export function HandoffDetailPage() {
           <div style={{ display: "flex", gap: 8 }}>
             <button
               className="btn btn-secondary"
-              disabled={ticket.status === "in_progress"}
+              disabled={
+                ticket.status !== "open" || updateMutation.isPending
+              }
               onClick={() => updateMutation.mutate("in_progress")}
             >
               标记处理中
             </button>
             <button
               className="btn btn-primary"
-              disabled={ticket.status === "resolved"}
+              disabled={
+                ticket.status === "resolved" || updateMutation.isPending
+              }
               onClick={() => updateMutation.mutate("resolved")}
             >
               标记已解决
             </button>
           </div>
         </div>
+
+        {updateMutation.error && (
+          <div className="error-text" role="alert">
+            状态更新失败，请稍后重试
+          </div>
+        )}
 
         <div className="detail-section">
           <h3>需求摘要</h3>
@@ -160,71 +129,12 @@ export function HandoffDetailPage() {
           )}
         </div>
 
-        <div className="detail-section handoff-conversation">
-          <h3>会话记录</h3>
-          <div className="handoff-message-list" aria-live="polite">
-            {messagesLoading && (
-              <div className="state-box">
-                <div className="spinner" />
-              </div>
-            )}
-            {messagesError && (
-              <div className="error-text">会话加载失败，请稍后重试</div>
-            )}
-            {!messagesLoading &&
-              !messagesError &&
-              (messages || []).map((message) => (
-                <div
-                  key={message.id}
-                  className={`message ${message.role}`}
-                >
-                  <div className="message-meta">
-                    {message.role === "user"
-                      ? "顾客"
-                      : message.role === "admin"
-                        ? "人工客服"
-                        : "智能客服"}
-                  </div>
-                  <div className="message-bubble">{message.content}</div>
-                </div>
-              ))}
-            {!messagesLoading &&
-              !messagesError &&
-              (messages || []).length === 0 && (
-                <div className="conversation-time">（无）</div>
-              )}
+        {ticket.resolution_note && (
+          <div className="detail-section">
+            <h3>人工处理结论</h3>
+            <div>{ticket.resolution_note}</div>
           </div>
-
-          <div className="handoff-reply">
-            <label htmlFor="handoff-reply">人工回复</label>
-            <textarea
-              id="handoff-reply"
-              className="input"
-              rows={3}
-              value={reply}
-              maxLength={4000}
-              onChange={(event) => setReply(event.target.value)}
-            />
-            {replyMutation.error && (
-              <div className="error-text" role="alert">
-                回复发送失败，请稍后重试
-              </div>
-            )}
-            {replyNotice && (
-              <div className="success-text" role="status">
-                {replyNotice}
-              </div>
-            )}
-            <button
-              className="btn btn-primary"
-              disabled={!reply.trim() || replyMutation.isPending}
-              onClick={() => replyMutation.mutate(reply.trim())}
-            >
-              <Send size={16} />
-              发送并交回智能体
-            </button>
-          </div>
-        </div>
+        )}
 
         <AfterSaleDetail context={afterSaleContext} />
       </div>
