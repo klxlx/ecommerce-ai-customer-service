@@ -241,6 +241,19 @@ async def update_status(
     ticket = await handoff_repo.get_handoff(session, handoff_id)
     if ticket is None:
         return None
+
+    if status == "resolved" and ticket.status != "resolved":
+        # The queue may close a ticket directly; keep the customer-facing
+        # handback consistent with the live console release flow.
+        ticket.resolved_at = datetime.now(timezone.utc)
+        ticket.close_reason = ticket.close_reason or "marked_resolved"
+        await chat_repo.add_message(
+            session,
+            ticket.conversation_id,
+            "system",
+            "人工服务已结束，智能体继续为您服务。",
+        )
+
     return await handoff_repo.update_status(session, ticket, status)
 
 

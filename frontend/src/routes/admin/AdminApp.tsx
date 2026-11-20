@@ -1,9 +1,9 @@
 import { Navigate, NavLink, Route, Routes } from "react-router-dom";
 import {
   BookOpen,
+  Headset,
   Inbox,
   LogOut,
-  MessagesSquare,
   ScrollText,
 } from "lucide-react";
 import { useAuth } from "../../auth/AuthContext";
@@ -31,9 +31,9 @@ export function AdminApp() {
             <Inbox size={18} />
             <span>工单队列</span>
           </NavLink>
-          <NavLink className={navClass} to="/admin/live" aria-label="人工回复">
-            <MessagesSquare size={18} />
-            <span>人工回复</span>
+          <NavLink className={navClass} to="/admin/live" aria-label="客服回复">
+            <Headset size={18} />
+            <span>客服回复</span>
           </NavLink>
           <NavLink className={navClass} to="/admin/knowledge" aria-label="知识库">
             <BookOpen size={18} />

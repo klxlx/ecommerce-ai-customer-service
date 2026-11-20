@@ -9,46 +9,17 @@ import {
   sendHandoffReply,
   type HandoffLiveSession,
 } from "../../api/admin";
-import type { ChatMessage } from "../../api/chat";
+import { MessageBubble } from "../../components/MessageBubble";
+import {
+  formatTimeDivider,
+  shouldShowTimeDivider,
+} from "../../components/chatTime";
 import { useAuth } from "../../auth/AuthContext";
-
-const ROLE_LABEL: Record<string, string> = {
-  user: "顾客",
-  assistant: "智能客服",
-  admin: "人工客服",
-  system: "系统提示",
-};
-
-function formatClock(value: string | null): string {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleTimeString("zh-CN", {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
 
 function waitedMinutes(createdAt: string): number {
   const date = new Date(createdAt);
   if (Number.isNaN(date.getTime())) return 0;
   return Math.max(0, Math.floor((Date.now() - date.getTime()) / 60000));
-}
-
-const TIME_DIVIDER_MS = 5 * 60 * 1000;
-
-function shouldShowDivider(messages: ChatMessage[], index: number): boolean {
-  if (index === 0) return false;
-  const previous = new Date(messages[index - 1].created_at).getTime();
-  const current = new Date(messages[index].created_at).getTime();
-  if (Number.isNaN(previous) || Number.isNaN(current)) return false;
-  return current - previous >= TIME_DIVIDER_MS;
-}
-
-function formatDivider(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return `${date.getMonth() + 1}月${date.getDate()}日 ${formatClock(value)}`;
 }
 
 export function LiveConsolePage() {
@@ -83,7 +54,21 @@ export function LiveConsolePage() {
 
   const claimMutation = useMutation({
     mutationFn: (id: number) => claimHandoff(id),
-    onSuccess: () => {
+    onSuccess: (ticket) => {
+      queryClient.setQueryData<HandoffLiveSession[]>(
+        ["admin", "live"],
+        (current = []) =>
+          current.map((session) =>
+            session.id === ticket.id
+              ? {
+                  ...session,
+                  status: "in_progress",
+                  assignee_id: ticket.assignee_id ?? user?.id ?? null,
+                  assignee_name: user?.username ?? "",
+                }
+              : session,
+          ),
+      );
       setNotice("已接入会话，可以开始回复顾客。");
       queryClient.invalidateQueries({ queryKey: ["admin", "live"] });
       queryClient.invalidateQueries({ queryKey: ["admin", "handoffs"] });
@@ -91,7 +76,8 @@ export function LiveConsolePage() {
   });
 
   const replyMutation = useMutation({
-    mutationFn: (content: string) => sendHandoffReply(selectedId as number, content),
+    mutationFn: (content: string) =>
+      sendHandoffReply(selectedId as number, content),
     onSuccess: () => {
       setDraft("");
       queryClient.invalidateQueries({
@@ -107,7 +93,7 @@ export function LiveConsolePage() {
       setReleaseOpen(false);
       setReleaseNote("");
       setSelectedId(null);
-      setNotice("已退出人工回复，会话已交还智能体。");
+      setNotice("已退出会话，已交还智能体。");
       queryClient.invalidateQueries({ queryKey: ["admin", "live"] });
       queryClient.invalidateQueries({ queryKey: ["admin", "handoffs"] });
     },
@@ -134,24 +120,22 @@ export function LiveConsolePage() {
   };
 
   return (
-    <div className="live-console">
-      <div className="live-heading">
-        <div>
-          <h2 className="admin-title">人工回复</h2>
-          <div className="conversation-time">
-            待接入 {waiting.length} · 进行中 {serving.length}
-          </div>
+    <div className="cs-console">
+      <div className="cs-heading">
+        <h2 className="admin-title">客服回复</h2>
+        <div className="conversation-time">
+          待接入 {waiting.length} · 接待中 {serving.length}
         </div>
       </div>
 
       {notice && (
-        <div className="success-text live-notice" role="status">
+        <div className="success-text cs-notice" role="status">
           {notice}
         </div>
       )}
 
-      <div className="live-grid">
-        <aside className="live-list" aria-label="人工会话列表">
+      <div className="cs-grid">
+        <aside className="cs-sidebar" aria-label="客服会话列表">
           <SessionGroup
             title="待接入"
             empty="暂无等待接入的顾客"
@@ -161,7 +145,7 @@ export function LiveConsolePage() {
             currentUserId={user?.id}
           />
           <SessionGroup
-            title="进行中"
+            title="接待中"
             empty="暂无正在接待的会话"
             sessions={serving}
             selectedId={selectedId}
@@ -170,14 +154,14 @@ export function LiveConsolePage() {
           />
         </aside>
 
-        <section className="live-detail" aria-label="会话窗口">
+        <section className="cs-main" aria-label="顾客会话窗口">
           {isLoading && (
             <div className="state-box">
               <div className="spinner" />
             </div>
           )}
           {!isLoading && !selected && (
-            <div className="live-empty">
+            <div className="cs-empty">
               <Headset size={36} />
               <div>从左侧选择一个会话接入</div>
               <div className="conversation-time">
@@ -188,24 +172,20 @@ export function LiveConsolePage() {
 
           {selected && (
             <>
-              <header className="live-detail-head">
+              <header className="cs-chat-header">
                 <div>
-                  <div className="live-customer">
+                  <div className="cs-customer">
                     <UserRound size={16} />
                     <strong>{selected.username || `顾客 #${selected.user_id}`}</strong>
                     <span className={`pill pill-${selected.status}`}>
-                      {selected.status === "open" ? "待接入" : "进行中"}
+                      {selected.status === "open" ? "待接入" : "接待中"}
                     </span>
                   </div>
                   <div className="conversation-time">
-                    工单 #{selected.id} · 会话 #{selected.conversation_id} · 等待
-                    {" "}{waitedMinutes(selected.created_at)} 分钟
+                    等待 {waitedMinutes(selected.created_at)} 分钟 · 工单 #{selected.id}
                   </div>
-                  {selected.summary && (
-                    <div className="live-summary">{selected.summary}</div>
-                  )}
                 </div>
-                <div className="live-head-actions">
+                <div className="cs-head-actions">
                   {selected.status === "open" && (
                     <button
                       className="btn btn-primary"
@@ -226,26 +206,30 @@ export function LiveConsolePage() {
                       }}
                     >
                       <LogOut size={16} />
-                      退出人工回复
+                      退出会话
                     </button>
                   )}
                 </div>
               </header>
 
               {claimMutation.error && (
-                <div className="error-text live-alert" role="alert">
+                <div className="error-text cs-alert" role="alert">
                   {claimMutation.error instanceof Error
                     ? claimMutation.error.message
                     : "接入失败，请重试"}
                 </div>
               )}
               {claimedByOther && (
-                <div className="live-alert live-alert-muted">
-                  该会话由 {selected.assignee_name || "其他客服"} 接入，你当前为只读。
+                <div className="cs-alert cs-alert-muted">
+                  该会话由 {selected.assignee_name || "其他客服"} 接待中，你当前为只读。
                 </div>
               )}
 
-              <div className="live-messages" aria-live="polite">
+              <div
+                className="chat-messages"
+                aria-live="polite"
+                data-testid="chat-messages"
+              >
                 {messagesLoading && messages.length === 0 && (
                   <div className="state-box">
                     <div className="spinner" />
@@ -253,12 +237,12 @@ export function LiveConsolePage() {
                 )}
                 {messages.map((message, index) => (
                   <Fragment key={message.id}>
-                    {shouldShowDivider(messages, index) && (
+                    {shouldShowTimeDivider(messages, index) && (
                       <div className="chat-time-divider">
-                        {formatDivider(message.created_at)}
+                        {formatTimeDivider(message.created_at)}
                       </div>
                     )}
-                    <MessageRow message={message} />
+                    <MessageBubble message={message} />
                   </Fragment>
                 ))}
                 {!messagesLoading && messages.length === 0 && (
@@ -268,10 +252,10 @@ export function LiveConsolePage() {
               </div>
 
               {mine ? (
-                <div className="live-composer">
+                <div className="chat-composer cs-composer">
                   <textarea
                     className="input"
-                    rows={3}
+                    rows={2}
                     maxLength={4000}
                     placeholder="以人工客服身份回复顾客…"
                     value={draft}
@@ -285,27 +269,25 @@ export function LiveConsolePage() {
                       }
                     }}
                   />
-                  <div className="live-composer-actions">
-                    {replyMutation.error && (
-                      <span className="error-text" role="alert">
-                        发送失败，请重试
-                      </span>
-                    )}
-                    <button
-                      className="btn btn-primary"
-                      disabled={!draft.trim() || replyMutation.isPending}
-                      onClick={() => replyMutation.mutate(draft.trim())}
-                    >
-                      <Send size={16} />
-                      {replyMutation.isPending ? "发送中…" : "发送"}
-                    </button>
-                  </div>
+                  <button
+                    className="btn btn-primary send-btn"
+                    aria-label="发送"
+                    disabled={!draft.trim() || replyMutation.isPending}
+                    onClick={() => replyMutation.mutate(draft.trim())}
+                  >
+                    <Send size={16} />
+                  </button>
                 </div>
               ) : (
-                <div className="live-composer live-composer-locked">
+                <div className="chat-composer cs-composer cs-composer-locked">
                   {selected.status === "open"
                     ? "接入会话后即可回复顾客。"
                     : `会话由 ${selected.assignee_name || "其他客服"} 接待中，暂不可回复。`}
+                </div>
+              )}
+              {mine && (
+                <div className="cs-composer-hint">
+                  回复不会结束会话；确认问题解决后，点右上角「退出会话」交还智能体。
                 </div>
               )}
             </>
@@ -316,14 +298,14 @@ export function LiveConsolePage() {
       {releaseOpen && (
         <div className="modal-backdrop" role="presentation">
           <div
-            className="modal live-release-modal"
+            className="modal cs-release-modal"
             role="dialog"
             aria-modal="true"
-            aria-label="退出人工回复"
+            aria-label="退出会话"
           >
-            <h3>退出人工回复</h3>
+            <h3>退出会话</h3>
             <p className="conversation-time">
-              填写处理结论后，会话将交还智能体，顾客可继续提问。
+              确认顾客问题已解决。填写处理结论后，会话将交还智能体继续服务。
             </p>
             <textarea
               className="input"
@@ -352,7 +334,7 @@ export function LiveConsolePage() {
                 disabled={!releaseNote.trim() || releaseMutation.isPending}
                 onClick={() => releaseMutation.mutate(releaseNote.trim())}
               >
-                {releaseMutation.isPending ? "交还中…" : "确认交还智能体"}
+                {releaseMutation.isPending ? "交还中…" : "确认解决并交还"}
               </button>
             </div>
           </div>
@@ -378,13 +360,13 @@ function SessionGroup({
   currentUserId?: number;
 }) {
   return (
-    <section className="live-group">
+    <section className="cs-group">
       <h3>
         {title}
-        <span className="live-count">{sessions.length}</span>
+        <span className="cs-count">{sessions.length}</span>
       </h3>
       {sessions.length === 0 && (
-        <div className="conversation-time">{empty}</div>
+        <div className="conversation-time cs-group-empty">{empty}</div>
       )}
       {sessions.map((session) => {
         const mine =
@@ -394,49 +376,31 @@ function SessionGroup({
           <button
             key={session.id}
             className={
-              session.id === selectedId
-                ? "live-item active"
-                : "live-item"
+              session.id === selectedId ? "cs-session active" : "cs-session"
             }
             onClick={() => onSelect(session)}
           >
-            <div className="live-item-top">
+            <div className="cs-session-top">
               <strong>{session.username || `顾客 #${session.user_id}`}</strong>
               <span className="conversation-time">
                 {waitedMinutes(session.created_at)} 分钟
               </span>
             </div>
-            <div className="live-item-preview">
+            <div className="cs-session-preview">
               {session.last_message || session.summary || "（暂无消息）"}
             </div>
-            <div className="live-item-meta">
+            <div className="cs-session-meta">
               <span className={`pill pill-${session.status}`}>
                 {mine
                   ? "我接待中"
                   : session.status === "in_progress"
-                    ? session.assignee_name || "处理中"
+                    ? session.assignee_name || "接待中"
                     : "待接入"}
-              </span>
-              <span className="conversation-time">
-                {formatClock(session.last_message_at)}
               </span>
             </div>
           </button>
         );
       })}
     </section>
-  );
-}
-
-function MessageRow({ message }: { message: ChatMessage }) {
-  if (message.role === "system") {
-    return <div className="live-system">{message.content}</div>;
-  }
-  return (
-    <div className={`message ${message.role}`}>
-      <div className="message-meta">{ROLE_LABEL[message.role] || message.role}</div>
-      <div className="message-bubble">{message.content}</div>
-      <div className="message-time">{formatClock(message.created_at)}</div>
-    </div>
   );
 }
