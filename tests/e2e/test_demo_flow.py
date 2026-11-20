@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
 
 from app.api.deps import get_container
 from app.core.config import get_settings
-from app.db.models import HandoffTicket, User
+from app.db.models import HandoffTicket
 from app.db.session import create_session_factory
 from app.graph.container import Container
 from app.main import create_app
@@ -46,15 +45,9 @@ def _auth(token):
 
 @pytest.fixture()
 async def seeded(db_session):
-    await seed_demo._seed_users(db_session)
+    users = await seed_demo._seed_users(db_session)
     products = await seed_demo._seed_products(db_session)
-    users = {}
-    users["customer"] = (
-        await db_session.execute(
-            select(User).where(User.username == "customer")
-        )
-    ).scalar_one()
-    await seed_demo._seed_orders(db_session, users["customer"], products)
+    await seed_demo._seed_orders(db_session, users, products)
     yield
 
 

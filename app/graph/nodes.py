@@ -23,7 +23,7 @@ from app.graph.state import (
     MAX_CLARIFICATION_ATTEMPTS,
     AgentState,
 )
-from app.prompts.answer import build_answer_messages
+from app.prompts.answer import KNOWLEDGE_GAP_MARKER, build_answer_messages
 from app.prompts.chitchat import build_chitchat_messages
 from app.schemas.after_sales import AfterSaleFact
 from app.schemas.catalog import AmbiguousProduct, ProductFact
@@ -43,8 +43,13 @@ from app.tools.weather import (
 REFUND_REVIEW_THRESHOLD = Decimal("500.00")
 
 GREETING_REPLY = (
-    "您好！我是您的购物客服助手，可以帮您解答商品咨询、交易规则，"
-    "以及查询订单进度。请问有什么可以帮您？"
+    "你好呀！我是智能客服小天，也是您的购物客服助手，可以帮您解答商品咨询、"
+    "交易规则，以及查询订单进度。请问有什么可以帮您？"
+)
+
+KNOWLEDGE_GAP_REPLY = (
+    "抱歉，我还暂时找不到与这个问题相关的内容，不过我已经列入我的学习内容里了。"
+    "可以换个说法、补充具体的产品名或文档名称再问一次吗？"
 )
 
 CHITCHAT_FRIENDLY = (
@@ -100,13 +105,83 @@ def _build_handoff(state: AgentState, reason: str) -> dict:
     return build_handoff_payload(state, reason)
 
 
+async def _complete_answer(
+    state: AgentState,
+    messages: list[dict],
+    *,
+    model: str | None = None,
+    max_chars: int | None = None,
+    sentinel: str | None = None,
+) -> str:
+    """Complete an answer, forwarding model tokens when a sink is present.
+
+    ``sentinel`` lets the knowledge node suppress a machine-readable gap marker
+    before it reaches the customer's streaming bubble.
+    """
+    chat = state["chat"]
+    sink = state.get("stream")
+    stream_factory = getattr(chat, "stream", None)
+    if sink is not None and callable(stream_factory):
+        stream = stream_factory(messages, model=model)
+        parts: list[str] = []
+        total = 0
+        checking = sentinel is not None
+        prefix = ""
+        try:
+            async for delta in stream:
+                if not delta:
+                    continue
+                if checking:
+                    prefix += delta
+                    lead = prefix.lstrip()
+                    if not lead:
+                        continue
+                    if lead.startswith(sentinel):
+                        return sentinel
+                    if sentinel.startswith(lead):
+                        continue
+                    checking = False
+                    parts.append(prefix)
+                    total += len(prefix)
+                    await sink(prefix)
+                    continue
+                if max_chars is not None:
+                    remaining = max_chars - total
+                    if remaining <= 0:
+                        break
+                    delta = delta[:remaining]
+                parts.append(delta)
+                total += len(delta)
+                await sink(delta)
+            if checking and prefix:
+                parts.append(prefix)
+                await sink(prefix)
+        finally:
+            close = getattr(stream, "aclose", None)
+            if callable(close):
+                await close()
+        answer = "".join(parts).strip()
+        if answer:
+            return answer
+
+    if model:
+        return (await chat.complete(messages, model=model)).strip()
+    return (await chat.complete(messages)).strip()
+
+
 def _knowledge_unavailable(
     state: AgentState,
     *,
     kb_type: str,
     status: str,
+    parent_ids: list[int] | None = None,
 ) -> dict:
-    knowledge_evidence = {"kb_type": kb_type, "status": status}
+    knowledge_evidence: dict[str, object] = {
+        "kb_type": kb_type,
+        "status": status,
+    }
+    if parent_ids:
+        knowledge_evidence["parent_ids"] = parent_ids
     tool_evidence = {
         **state.get("tool_evidence", {}),
         "knowledge": knowledge_evidence,
@@ -115,11 +190,8 @@ def _knowledge_unavailable(
     handoff_state["sources"] = []
     handoff_state["tool_evidence"] = tool_evidence
     return {
-        "intent": "handoff",
-        "answer": (
-            "抱歉，这个问题暂时无法从知识库确认，"
-            "已为您转接人工客服继续核实，请稍候。"
-        ),
+        "intent": "knowledge_gap",
+        "answer": KNOWLEDGE_GAP_REPLY,
         "sources": [],
         "tool_evidence": tool_evidence,
         "handoff": _build_handoff(handoff_state, "knowledge_unavailable"),
@@ -297,7 +369,18 @@ async def route_node(state: AgentState) -> dict:
             "intent": "clarification",
             "clarify_question": "抱歉，我没太理解您的意思，请您再描述一下要咨询的商品或订单问题。",
         }
-    slots = _clear_pending({**existing_slots, **decision.slots})
+    slots = _clear_pending(existing_slots)
+    for key, value in decision.slots.items():
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                # The optimized router prompt always emits all five slots with
+                # "" for missing values. Empty strings must not erase context
+                # carried over from earlier turns.
+                if key == "query_scope" and decision.intent == "order":
+                    slots.pop("query_scope", None)
+                continue
+        slots[key] = value
     if decision.intent == "order":
         if _is_order_list_query(user_message):
             slots.pop("order_no", None)
@@ -335,7 +418,6 @@ async def knowledge_node(state: AgentState) -> dict:
             status="not_found",
         )
 
-    chat = state["chat"]
     knowledge_agent = getattr(state.get("agents"), "knowledge", None)
     history = state.get("history", [])
     current = state.get("user_message", "").strip()
@@ -349,11 +431,23 @@ async def knowledge_node(state: AgentState) -> dict:
         system_prompt=getattr(knowledge_agent, "system_prompt", None),
     )
     model = getattr(knowledge_agent, "model", None)
-    if model:
-        answer = await chat.complete(messages, model=model)
-    else:
-        answer = await chat.complete(messages)
+    answer = await _complete_answer(
+        state,
+        messages,
+        model=model,
+        sentinel=KNOWLEDGE_GAP_MARKER,
+    )
     answer = answer.strip()
+    if KNOWLEDGE_GAP_MARKER in answer or (
+        "人工客服" in answer
+        and ("暂时无法确认" in answer or "没有相关" in answer)
+    ):
+        return _knowledge_unavailable(
+            state,
+            kb_type=kb_type,
+            status="insufficient_context",
+            parent_ids=result.parent_ids,
+        )
     if not answer:
         return _knowledge_unavailable(
             state,
@@ -774,7 +868,6 @@ async def chitchat_node(state: AgentState) -> dict:
             "chit_chat_streak": streak + 1,
         }
 
-    chat = state["chat"]
     user_message = state.get("user_message", "").strip()
     facts: dict = {}
     tool_evidence: dict = {}
@@ -834,10 +927,7 @@ async def chitchat_node(state: AgentState) -> dict:
         facts,
     )
     model = getattr(chitchat_agent, "model", None)
-    if model:
-        answer = await chat.complete(messages, model=model)
-    else:
-        answer = await chat.complete(messages)
+    answer = await _complete_answer(state, messages, model=model, max_chars=200)
     answer = answer.strip()[:200]
     if not answer:
         answer = "您好，我在呢。请问今天有什么可以帮您？"

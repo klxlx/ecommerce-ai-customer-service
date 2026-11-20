@@ -54,6 +54,7 @@ async def create_ticket(
     slots: dict,
     recent_messages: list,
     evidence: dict,
+    kind: str = "human",
 ) -> HandoffTicket:
     return await handoff_repo.create_handoff(
         session,
@@ -63,6 +64,7 @@ async def create_ticket(
         slots=slots,
         recent_messages=recent_messages,
         evidence=evidence,
+        kind=kind,
     )
 
 
@@ -244,15 +246,17 @@ async def update_status(
 
     if status == "resolved" and ticket.status != "resolved":
         # The queue may close a ticket directly; keep the customer-facing
-        # handback consistent with the live console release flow.
+        # handback consistent with the live console release flow. Knowledge-gap
+        # tickets never entered human service, so they must stay silent.
         ticket.resolved_at = datetime.now(timezone.utc)
         ticket.close_reason = ticket.close_reason or "marked_resolved"
-        await chat_repo.add_message(
-            session,
-            ticket.conversation_id,
-            "system",
-            "人工服务已结束，智能体继续为您服务。",
-        )
+        if ticket.kind == "human":
+            await chat_repo.add_message(
+                session,
+                ticket.conversation_id,
+                "system",
+                "人工服务已结束，智能体继续为您服务。",
+            )
 
     return await handoff_repo.update_status(session, ticket, status)
 

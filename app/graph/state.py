@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any, Literal, TypedDict
 
 INTENTS = Literal[
@@ -15,6 +15,7 @@ INTENTS = Literal[
     "chit_chat",
     "clarification",
     "handoff",
+    "knowledge_gap",
 ]
 
 CHIT_CHAT_LIMIT = 2
@@ -42,3 +43,4 @@ class AgentState(TypedDict, total=False):
     agents: Any
     weather: Any
     local_time: Callable[[], dict[str, str]]
+    stream: Callable[[str], Awaitable[None]] | None

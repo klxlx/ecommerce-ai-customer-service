@@ -38,6 +38,7 @@ export interface HandoffTicket {
   conversation_id: number;
   user_id: number;
   status: "open" | "in_progress" | "resolved";
+  kind?: "human" | "knowledge_gap";
   summary: string;
   slots: Record<string, unknown>;
   recent_messages: { role: string; content: string }[];

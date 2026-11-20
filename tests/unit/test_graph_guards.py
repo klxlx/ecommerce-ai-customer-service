@@ -193,13 +193,13 @@ async def test_knowledge_retrieval_failure_creates_sanitized_handoff(monkeypatch
     monkeypatch.setattr(nodes, "retrieve_knowledge", fake_retrieve)
     result = await nodes.knowledge_node(_state(intent="product_knowledge"))
 
-    assert result["intent"] == "handoff"
+    assert result["intent"] == "knowledge_gap"
     assert result["handoff"]["reason"] == "knowledge_unavailable"
     assert result["tool_evidence"]["knowledge"] == {
         "kb_type": "product",
         "status": "retrieval_failed",
     }
-    assert "人工" in result["answer"]
+    assert "学习内容" in result["answer"]
     assert "embedding down" not in result["answer"]
     assert "embedding down" not in str(result["handoff"])
 
@@ -212,10 +212,10 @@ async def test_knowledge_empty_result_creates_handoff(monkeypatch):
     monkeypatch.setattr(nodes, "retrieve_knowledge", fake_retrieve)
     result = await nodes.knowledge_node(_state(intent="product_knowledge"))
 
-    assert result["intent"] == "handoff"
+    assert result["intent"] == "knowledge_gap"
     assert result["handoff"]["reason"] == "knowledge_unavailable"
     assert result["tool_evidence"]["knowledge"]["status"] == "not_found"
-    assert "人工" in result["answer"]
+    assert "学习内容" in result["answer"]
 
 
 @pytest.mark.anyio
@@ -234,11 +234,11 @@ async def test_knowledge_empty_answer_creates_handoff(monkeypatch):
         )
     )
 
-    assert result["intent"] == "handoff"
+    assert result["intent"] == "knowledge_gap"
     assert result["handoff"]["reason"] == "knowledge_unavailable"
     assert result["tool_evidence"]["knowledge"]["status"] == "empty_answer"
     assert result["sources"] == []
-    assert "人工" in result["answer"]
+    assert "学习内容" in result["answer"]
 
 
 @pytest.mark.anyio

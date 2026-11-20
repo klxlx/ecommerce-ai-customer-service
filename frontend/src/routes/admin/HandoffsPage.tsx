@@ -76,6 +76,9 @@ export function HandoffsPage() {
                     {hasAfterSaleEvidence(t) && (
                       <span className="after-sale-tag">售后</span>
                     )}
+                    {t.kind === "knowledge_gap" && (
+                      <span className="knowledge-gap-tag">知识缺口</span>
+                    )}
                   </div>
                 </td>
                 <td data-label="状态">

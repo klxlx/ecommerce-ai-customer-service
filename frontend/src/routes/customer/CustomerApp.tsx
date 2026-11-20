@@ -30,8 +30,12 @@ import {
   deleteConversation,
   listConversations,
   listMessages,
-  sendMessage,
+  sendMessageStream,
+  type ChatMessage,
 } from "../../api/chat";
+
+const WELCOME_MESSAGE =
+  "你好呀！我是你的智能客服小天，请问有什么能够帮到你的？";
 
 const SUGGESTIONS = [
   "有哪些蓝牙耳机？",
@@ -297,29 +301,120 @@ function ChatPanel({
   onOpenRail: () => void;
 }) {
   const [draft, setDraft] = useState("");
+  const [streamingMessages, setStreamingMessages] = useState<
+    ChatMessage[] | null
+  >(null);
+  const [streaming, setStreaming] = useState(false);
+  const [streamError, setStreamError] = useState("");
+  const streamAbort = useRef<AbortController | null>(null);
   const queryClient = useQueryClient();
 
   const { data: messages, isLoading } = useQuery({
     queryKey: ["messages", conversationId],
     queryFn: () => listMessages(conversationId!),
     enabled: conversationId != null,
-    refetchInterval: conversationId == null ? false : 3000,
+    refetchInterval: conversationId == null || streaming ? false : 3000,
   });
 
-  const sendMutation = useMutation({
-    mutationFn: (content: string) => sendMessage(conversationId!, content),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["messages", conversationId] });
-      queryClient.invalidateQueries({ queryKey: ["conversations"] });
-    },
-  });
+  useEffect(() => {
+    return () => {
+      streamAbort.current?.abort();
+    };
+  }, [conversationId]);
 
-  function handleSend() {
+  useEffect(() => {
+    setStreamingMessages(null);
+    setStreaming(false);
+    setStreamError("");
+  }, [conversationId]);
+
+  async function handleSend() {
     const content = draft.trim();
-    if (!content || conversationId == null) return;
+    if (!content || conversationId == null || streaming) return;
+
     setDraft("");
-    sendMutation.mutate(content);
+    setStreamError("");
+    const now = new Date().toISOString();
+    const pendingUser: ChatMessage = {
+      id: -1,
+      role: "user",
+      content,
+      intent: null,
+      sources: null,
+      created_at: now,
+    };
+    const pendingAssistant: ChatMessage = {
+      id: -2,
+      role: "assistant",
+      content: "",
+      intent: null,
+      sources: null,
+      created_at: now,
+    };
+    setStreamingMessages([pendingUser, pendingAssistant]);
+    setStreaming(true);
+
+    const controller = new AbortController();
+    streamAbort.current = controller;
+
+    try {
+      await sendMessageStream(
+        conversationId,
+        content,
+        (text) => {
+          setStreamingMessages((current) =>
+            current
+              ? current.map((message) =>
+                  message.id === -2
+                    ? { ...message, content: message.content + text }
+                    : message,
+                )
+              : current,
+          );
+        },
+        controller.signal,
+      );
+
+      const fresh = await listMessages(conversationId);
+      queryClient.setQueryData(["messages", conversationId], fresh);
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+      setStreamingMessages(null);
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        setStreamError(
+          error instanceof Error ? error.message : "发送失败，请稍后重试",
+        );
+        try {
+          const fresh = await listMessages(conversationId);
+          queryClient.setQueryData(["messages", conversationId], fresh);
+        } catch {
+          // Keep the optimistic turn visible when the refetch also fails.
+        }
+        setStreamingMessages(null);
+      }
+    } finally {
+      if (streamAbort.current === controller) {
+        streamAbort.current = null;
+      }
+      setStreaming(false);
+    }
   }
+
+  const actualMessages = messages ?? [];
+  const greeting: ChatMessage = {
+    id: -100,
+    role: "assistant",
+    content: WELCOME_MESSAGE,
+    intent: null,
+    sources: null,
+    created_at: new Date().toISOString(),
+  };
+  const visibleMessages: ChatMessage[] =
+    !isLoading &&
+    actualMessages.length === 0 &&
+    streamingMessages === null
+      ? [greeting]
+      : [...actualMessages, ...(streamingMessages ?? [])];
 
   return (
     <section className="chat-panel">
@@ -360,29 +455,32 @@ function ChatPanel({
                 <div className="spinner" />
               </div>
             )}
-            {!isLoading && messages?.length === 0 && (
-              <div className="state-box">
-                你好，我是智能客服，有什么可以帮您？
-              </div>
-            )}
-            {messages?.map((m, index) => (
+            {visibleMessages.map((m, index) => (
               <Fragment key={m.id}>
-                {shouldShowTimeDivider(messages, index) && (
+                {shouldShowTimeDivider(visibleMessages, index) && (
                   <div className="chat-time-divider">
                     {formatTimeDivider(m.created_at)}
                   </div>
                 )}
-                <MessageBubble message={m} />
+                {m.id === -2 ? (
+                  <div className="message assistant">
+                    <div className="message-bubble">
+                      {m.content}
+                      <span className="stream-cursor" aria-hidden="true" />
+                    </div>
+                  </div>
+                ) : (
+                  <MessageBubble message={m} />
+                )}
               </Fragment>
             ))}
-            {sendMutation.isPending && (
-              <div className="message assistant">
-                <div className="message-bubble">
-                  <div className="spinner" />
-                </div>
-              </div>
-            )}
           </div>
+
+          {streamError && (
+            <div className="error-text chat-stream-error" role="alert">
+              {streamError}
+            </div>
+          )}
 
           <footer className="chat-composer">
             <textarea
@@ -403,7 +501,7 @@ function ChatPanel({
               className="btn btn-primary send-btn"
               aria-label="发送"
               onClick={handleSend}
-              disabled={!draft.trim() || sendMutation.isPending}
+              disabled={!draft.trim() || streaming}
             >
               <Send size={16} />
             </button>

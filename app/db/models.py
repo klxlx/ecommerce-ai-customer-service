@@ -442,6 +442,10 @@ class HandoffTicket(Base, TimestampMixin):
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     status: Mapped[str] = mapped_column(String(16), default="open", nullable=False)
+    # human | knowledge_gap：知识缺口工单不进入客服回复，也不阻断智能体。
+    kind: Mapped[str] = mapped_column(
+        String(24), default="human", server_default="human", nullable=False
+    )
     summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
     slots: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     recent_messages: Mapped[list] = mapped_column(JSON, default=list, nullable=False)

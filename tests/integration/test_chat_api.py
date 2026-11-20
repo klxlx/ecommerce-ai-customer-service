@@ -149,7 +149,76 @@ async def test_greeting_flow_persists_messages(db_session):
 
         messages = (await client.get(f"/api/conversations/{conv['id']}/messages", headers=_auth(token))).json()
         roles = [m["role"] for m in messages]
-        assert roles == ["user", "assistant"]
+        assert roles == ["assistant", "user", "assistant"]
+
+
+@pytest.mark.anyio
+async def test_streaming_endpoint_emits_tokens_and_done(db_session):
+    await create_user(db_session, "stream-owner")
+    container = _make_container(
+        ScriptedChat({"你好": {"intent": "greeting", "slots": {}}})
+    )
+    async with await _build_client(container) as client:
+        token = await _login(client, "stream-owner")
+        conv = (
+            await client.post("/api/conversations", json={}, headers=_auth(token))
+        ).json()
+        resp = await client.post(
+            f"/api/conversations/{conv['id']}/messages/stream",
+            json={"content": "你好"},
+            headers=_auth(token),
+        )
+
+    assert resp.status_code == 200
+    assert "event: token" in resp.text
+    assert "event: done" in resp.text
+    done = next(
+        json.loads(line.removeprefix("data:"))
+        for line in resp.text.splitlines()
+        if line.startswith("data:") and '"message_id"' in line
+    )
+    assert done["intent"] == "greeting"
+    assert "购物客服" in done["answer"]
+
+
+@pytest.mark.anyio
+async def test_knowledge_gap_ticket_does_not_block_next_turn(
+    db_session, monkeypatch
+):
+    await create_user(db_session, "knowledge-gap-followup-owner")
+
+    async def empty_retrieve(*args, **kwargs):
+        return RetrievalResult()
+
+    monkeypatch.setattr(nodes, "retrieve_knowledge", empty_retrieve)
+    container = _make_container(
+        ScriptedChat(
+            {
+                "积分": {"intent": "policy_knowledge", "slots": {}},
+                "你好": {"intent": "greeting", "slots": {}},
+            }
+        )
+    )
+
+    async with await _build_client(container) as client:
+        token = await _login(client, "knowledge-gap-followup-owner")
+        conversation = (
+            await client.post("/api/conversations", json={}, headers=_auth(token))
+        ).json()
+        first = await client.post(
+            f"/api/conversations/{conversation['id']}/messages",
+            json={"content": "会员积分规则是什么？"},
+            headers=_auth(token),
+        )
+        second = await client.post(
+            f"/api/conversations/{conversation['id']}/messages",
+            json={"content": "你好"},
+            headers=_auth(token),
+        )
+
+    assert first.json()["intent"] == "knowledge_gap"
+    assert second.json()["intent"] == "greeting"
+    assert "消息已发送给人工客服" not in second.json()["answer"]
 
 
 @pytest.mark.anyio
@@ -307,7 +376,7 @@ async def test_history_survives_new_app_instance(db_session):
         convs = (await client2.get("/api/conversations", headers=_auth(token2))).json()
         assert any(c["id"] == conv_id for c in convs)
         messages = (await client2.get(f"/api/conversations/{conv_id}/messages", headers=_auth(token2))).json()
-        assert len(messages) == 2
+        assert len(messages) == 3
 
 
 @pytest.mark.anyio
@@ -364,7 +433,7 @@ async def test_customer_can_soft_delete_own_conversation_and_cannot_continue_it(
         )
     ).scalars().all()
     assert conversation.deleted_at is not None
-    assert len(messages) == 2
+    assert len(messages) == 3
     assert len(runs) == 1
 
 
@@ -426,14 +495,21 @@ async def test_knowledge_not_found_creates_handoff_ticket(
 
     body = response.json()
     assert response.status_code == 200
-    assert body["intent"] == "handoff"
-    assert body["handoff"]["status"] == "open"
-    assert "人工客服" in body["answer"]
+    assert body["intent"] == "knowledge_gap"
+    assert body["handoff"] is None
+    assert "学习内容" in body["answer"]
 
     factory = create_session_factory(get_settings().database_url)
     async with factory() as session:
-        ticket = await session.get(HandoffTicket, body["handoff"]["id"])
-    assert ticket is not None
+        ticket = (
+            await session.execute(
+                select(HandoffTicket).where(
+                    HandoffTicket.conversation_id == conversation["id"]
+                )
+            )
+        ).scalar_one()
+    assert ticket.kind == "knowledge_gap"
+    assert ticket.status == "open"
     assert ticket.evidence["tool"]["knowledge"] == {
         "kb_type": "policy",
         "status": "not_found",
@@ -478,15 +554,21 @@ async def test_knowledge_empty_model_answer_creates_handoff_ticket(
 
     body = response.json()
     assert response.status_code == 200
-    assert body["intent"] == "handoff"
-    assert body["handoff"]["status"] == "open"
+    assert body["intent"] == "knowledge_gap"
+    assert body["handoff"] is None
     assert body["sources"] == []
-    assert "人工客服" in body["answer"]
+    assert "学习内容" in body["answer"]
 
     factory = create_session_factory(get_settings().database_url)
     async with factory() as session:
-        ticket = await session.get(HandoffTicket, body["handoff"]["id"])
-    assert ticket is not None
+        ticket = (
+            await session.execute(
+                select(HandoffTicket).where(
+                    HandoffTicket.conversation_id == conversation["id"]
+                )
+            )
+        ).scalar_one()
+    assert ticket.kind == "knowledge_gap"
     assert ticket.evidence["tool"]["knowledge"] == {
         "kb_type": "product",
         "status": "empty_answer",
@@ -530,8 +612,8 @@ async def test_knowledge_retrieval_error_is_sanitized_in_response_and_ticket(
 
     body = response.json()
     assert response.status_code == 200
-    assert body["intent"] == "handoff"
-    assert body["handoff"]["status"] == "open"
+    assert body["intent"] == "knowledge_gap"
+    assert body["handoff"] is None
     serialized = json.dumps(body, ensure_ascii=False)
     assert "SELECT" not in serialized
     assert "password" not in serialized
@@ -539,8 +621,14 @@ async def test_knowledge_retrieval_error_is_sanitized_in_response_and_ticket(
 
     factory = create_session_factory(get_settings().database_url)
     async with factory() as session:
-        ticket = await session.get(HandoffTicket, body["handoff"]["id"])
-    assert ticket is not None
+        ticket = (
+            await session.execute(
+                select(HandoffTicket).where(
+                    HandoffTicket.conversation_id == conversation["id"]
+                )
+            )
+        ).scalar_one()
+    assert ticket.kind == "knowledge_gap"
     assert ticket.evidence["tool"]["knowledge"] == {
         "kb_type": "policy",
         "status": "retrieval_failed",
