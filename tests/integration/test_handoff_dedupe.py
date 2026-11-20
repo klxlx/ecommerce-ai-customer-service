@@ -287,6 +287,109 @@ async def test_complaint_bypasses_limit(db_session):
 
 
 @pytest.mark.anyio
+async def test_return_ticket_does_not_count_towards_limit(db_session):
+    user = await create_user(db_session, "limit-return-user")
+    conversation = Conversation(user_id=user.id, title="退换货不占限额")
+    return_conversation = Conversation(user_id=user.id, title="退换货")
+    db_session.add_all([conversation, return_conversation])
+    await db_session.flush()
+    await _seed_ticket(
+        db_session,
+        user_id=user.id,
+        conversation_id=conversation.id,
+        summary="订单一直没发货",
+        kind="human",
+    )
+    return_ticket = HandoffTicket(
+        conversation_id=return_conversation.id,
+        user_id=user.id,
+        status="open",
+        kind="human",
+        category="return_exchange",
+        summary="退换货：智能手机 屏幕裂",
+        slots={},
+        recent_messages=[],
+        evidence={"return_request": {"dedupe_key": "ORD-1|SKU-1|屏幕裂|运输破损"}},
+    )
+    db_session.add(return_ticket)
+    await db_session.flush()
+
+    # One normal + one return ticket means one normal slot remains.
+    second_normal = await handoff_service.create_or_reuse_ticket(
+        db_session,
+        conversation_id=conversation.id,
+        user_id=user.id,
+        question="怎么申请退款",
+        summary="怎么申请退款",
+        slots={},
+        recent_messages=[],
+        evidence={},
+        kind="knowledge_gap",
+    )
+    assert second_normal.created is True
+    assert second_normal.ticket.kind == "knowledge_gap"
+
+    # Now two normal tickets are unresolved; the return ticket still does not
+    # consume a third slot, but a third normal ticket must be blocked.
+    with pytest.raises(handoff_service.HandoffLimitExceeded):
+        await handoff_service.create_or_reuse_ticket(
+            db_session,
+            conversation_id=conversation.id,
+            user_id=user.id,
+            question="Mate 90 的电池容量是多少？",
+            summary="Mate 90 的电池容量是多少？",
+            slots={},
+            recent_messages=[],
+            evidence={},
+            kind="knowledge_gap",
+        )
+
+
+@pytest.mark.anyio
+async def test_exact_return_dedupe_key_reuses_ticket(db_session):
+    user = await create_user(db_session, "return-dedupe-user")
+    conversation = Conversation(user_id=user.id, title="退换货去重")
+    db_session.add(conversation)
+    await db_session.flush()
+
+    first = await handoff_service.create_return_ticket(
+        db_session,
+        conversation_id=conversation.id,
+        user_id=user.id,
+        summary="退换货：智能手机 屏幕裂",
+        slots={},
+        recent_messages=[],
+        evidence={
+            "return_request": {
+                "dedupe_key": "ORD-2|SKU-2|屏幕裂|运输破损"
+            }
+        },
+        dedupe_key="ORD-2|SKU-2|屏幕裂|运输破损",
+    )
+    assert first.created is True
+    assert first.ticket.category == "return_exchange"
+
+    second = await handoff_service.create_return_ticket(
+        db_session,
+        conversation_id=conversation.id,
+        user_id=user.id,
+        summary="退换货：智能手机 屏幕裂",
+        slots={},
+        recent_messages=[],
+        evidence={
+            "return_request": {
+                "dedupe_key": "ORD-2|SKU-2|屏幕裂|运输破损"
+            }
+        },
+        dedupe_key="ORD-2|SKU-2|屏幕裂|运输破损",
+    )
+    assert second.created is False
+    assert second.duplicate is True
+    assert second.ticket.id == first.ticket.id
+    assert second.ticket.occurrence_count == 2
+
+
+@pytest.mark.anyio
 async def test_knowledge_gap_escalates_to_human_without_second_ticket(db_session):
     user = await create_user(db_session, "escalation-user")
     conversation = Conversation(user_id=user.id, title="升级")

@@ -255,6 +255,7 @@ async def create_or_reuse_ticket(
     recent_messages: list,
     evidence: dict,
     kind: str = "human",
+    category: str = "general",
     exception: bool = False,
     settings: Settings | None = None,
     embeddings: Any = None,
@@ -284,6 +285,10 @@ async def create_or_reuse_ticket(
     duplicate: HandoffTicket | None = None
     duplicate_similarity: float | None = None
     for ticket in active:
+        if ticket.category == "return_exchange":
+            # Return tickets have an exact business key; never merge them into
+            # a generic question by semantic similarity.
+            continue
         ticket_text = ticket.summary or ""
         ticket_embedding = ticket.question_embedding
         if ticket_embedding is None:
@@ -331,8 +336,13 @@ async def create_or_reuse_ticket(
             active_count=len(active),
         )
 
-    if len(active) >= max_unresolved and not exception:
-        raise HandoffLimitExceeded(active[:max_unresolved])
+    countable = [
+        ticket
+        for ticket in active
+        if ticket.category != "return_exchange"
+    ]
+    if len(countable) >= max_unresolved and not exception:
+        raise HandoffLimitExceeded(countable[:max_unresolved])
 
     ticket = await handoff_repo.create_handoff(
         session,
@@ -343,8 +353,73 @@ async def create_or_reuse_ticket(
         recent_messages=recent_messages,
         evidence=evidence,
         kind=kind,
+        category=category,
         question_norm=question_norm,
         question_embedding=query_embedding,
+        occurrence_count=1,
+        last_seen_at=now,
+    )
+    return TicketCreationResult(
+        ticket=ticket,
+        created=True,
+        duplicate=False,
+        escalated=False,
+        similarity=None,
+        active_count=len(active) + 1,
+    )
+
+
+async def create_return_ticket(
+    session: AsyncSession,
+    *,
+    conversation_id: int,
+    user_id: int,
+    summary: str,
+    slots: dict,
+    recent_messages: list,
+    evidence: dict,
+    dedupe_key: str,
+) -> TicketCreationResult:
+    """Create a return/exchange human ticket without the unresolved cap.
+
+    Exact business dedupe is used instead of semantic question matching so
+    different orders or damage reasons are never merged accidentally.
+    """
+    now = datetime.now(timezone.utc)
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(CAST(:key AS bigint))"),
+        {"key": user_id},
+    )
+    active = await handoff_repo.list_unresolved_for_user(session, user_id)
+    for ticket in active:
+        return_request = (ticket.evidence or {}).get("return_request") or {}
+        if (
+            ticket.category == "return_exchange"
+            and return_request.get("dedupe_key") == dedupe_key
+        ):
+            ticket.occurrence_count = (ticket.occurrence_count or 1) + 1
+            ticket.last_seen_at = now
+            await session.flush()
+            return TicketCreationResult(
+                ticket=ticket,
+                created=False,
+                duplicate=True,
+                escalated=False,
+                similarity=1.0,
+                active_count=len(active),
+            )
+
+    ticket = await handoff_repo.create_handoff(
+        session,
+        conversation_id=conversation_id,
+        user_id=user_id,
+        summary=summary,
+        slots=slots,
+        recent_messages=recent_messages,
+        evidence=evidence,
+        kind="human",
+        category="return_exchange",
+        question_norm=dedupe_key[:512],
         occurrence_count=1,
         last_seen_at=now,
     )
@@ -380,6 +455,7 @@ async def create_ticket(
     recent_messages: list,
     evidence: dict,
     kind: str = "human",
+    category: str = "general",
 ) -> HandoffTicket:
     return await handoff_repo.create_handoff(
         session,
@@ -390,6 +466,7 @@ async def create_ticket(
         recent_messages=recent_messages,
         evidence=evidence,
         kind=kind,
+        category=category,
     )
 
 
@@ -441,6 +518,8 @@ async def live_sessions(session: AsyncSession) -> list[dict]:
                 "user_id": ticket.user_id,
                 "username": customer.username if customer else "",
                 "status": ticket.status,
+                "kind": ticket.kind,
+                "category": ticket.category,
                 "assignee_id": ticket.assignee_id,
                 "assignee_name": assignee.username if assignee else "",
                 "summary": ticket.summary,

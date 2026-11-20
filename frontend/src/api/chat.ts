@@ -40,12 +40,19 @@ export interface AfterSaleContext {
   handoff_required: boolean;
 }
 
+export interface ChatAction {
+  type: string;
+  label: string;
+  description?: string;
+}
+
 export interface ChatMessage {
   id: number;
   role: "user" | "assistant" | "admin" | "system";
   content: string;
   intent: string | null;
   sources: SourceCitation[] | null;
+  actions?: ChatAction[] | null;
   after_sale?: AfterSaleContext | null;
   created_at: string;
 }
@@ -54,6 +61,8 @@ export interface ChatResponse {
   answer: string;
   intent: string | null;
   sources: SourceCitation[];
+  actions?: ChatAction[];
+  cached?: boolean;
   trace_id: number | null;
   handoff: { id: number; status: string; reason: string } | null;
   after_sale: AfterSaleContext | null;

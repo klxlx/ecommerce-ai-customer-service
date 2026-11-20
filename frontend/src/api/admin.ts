@@ -1,4 +1,4 @@
-import { apiFetch } from "./client";
+import { apiFetch, ApiError, getToken } from "./client";
 import type { ChatMessage } from "./chat";
 
 export interface HandoffOrderEvidence {
@@ -28,9 +28,34 @@ export interface HandoffToolEvidence {
   threshold?: HandoffThresholdEvidence;
 }
 
+export interface HandoffReturnEvidence {
+  dedupe_key?: string;
+  order_no?: string;
+  order_item_id?: number;
+  sku?: string;
+  product_name?: string;
+  model?: string;
+  color?: string;
+  damage_type?: string;
+  damage_level?: string;
+  reason?: string;
+  accessories?: string[];
+  return_address?: string;
+  phone?: string;
+  image_id?: string;
+  analysis_id?: number;
+  confidence?: number;
+  detected_objects?: {
+    label?: string;
+    label_zh?: string;
+    confidence?: number;
+  }[];
+}
+
 export interface HandoffEvidence {
   sources?: unknown[];
   tool?: HandoffToolEvidence;
+  return_request?: HandoffReturnEvidence;
 }
 
 export interface HandoffTicket {
@@ -39,6 +64,7 @@ export interface HandoffTicket {
   user_id: number;
   status: "open" | "in_progress" | "resolved";
   kind?: "human" | "knowledge_gap";
+  category?: "general" | "return_exchange";
   summary: string;
   slots: Record<string, unknown>;
   recent_messages: { role: string; content: string }[];
@@ -58,6 +84,8 @@ export interface HandoffLiveSession {
   user_id: number;
   username: string;
   status: "open" | "in_progress";
+  kind?: "human" | "knowledge_gap";
+  category?: "general" | "return_exchange";
   assignee_id: number | null;
   assignee_name: string;
   summary: string;
@@ -266,6 +294,19 @@ export async function sendHandoffReply(
     method: "POST",
     body: JSON.stringify({ content }),
   });
+}
+
+export async function getHandoffReturnImage(id: number): Promise<Blob> {
+  const token = getToken();
+  const headers = new Headers();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const resp = await fetch(`/api/admin/handoffs/${id}/return-image`, {
+    headers,
+  });
+  if (!resp.ok) {
+    throw new ApiError(resp.status, "退换货图片加载失败");
+  }
+  return resp.blob();
 }
 
 export async function listKnowledge(): Promise<KnowledgeItem[]> {

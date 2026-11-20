@@ -30,6 +30,8 @@ REQUIRED_TABLES = {
     "agent_runs",
     "tool_call_logs",
     "handoff_tickets",
+    "return_analyses",
+    "semantic_cache",
 }
 
 
@@ -234,6 +236,53 @@ async def test_chat_messages_store_nullable_after_sale_snapshot():
         is_nullable, data_type = row.one()
     assert is_nullable == "YES"
     assert data_type == "jsonb"
+
+
+@pytest.mark.anyio
+async def test_photo_return_and_cache_schema():
+    product_columns = await _table_columns("products")
+    assert {"model", "color"} <= product_columns
+    item_columns = await _table_columns("order_items")
+    assert {"model", "color"} <= item_columns
+    ticket_columns = await _table_columns("handoff_tickets")
+    assert "category" in ticket_columns
+    message_columns = await _table_columns("chat_messages")
+    assert "actions" in message_columns
+
+    analysis_columns = await _table_columns("return_analyses")
+    assert {
+        "user_id",
+        "conversation_id",
+        "image_id",
+        "image_path",
+        "result",
+        "confidence",
+        "passed",
+        "failure_reason",
+        "consumed_at",
+    } <= analysis_columns
+
+    cache_columns = await _table_columns("semantic_cache")
+    assert {
+        "question",
+        "question_norm",
+        "kb_type",
+        "answer",
+        "sources",
+        "embedding",
+        "hit_count",
+        "expires_at",
+    } <= cache_columns
+
+    factory = create_session_factory(get_settings().database_url)
+    async with factory() as session:
+        row = await session.execute(
+            text(
+                "SELECT udt_name FROM information_schema.columns "
+                "WHERE table_name = 'semantic_cache' AND column_name = 'embedding'"
+            )
+        )
+    assert row.scalar() == "vector"
 
 
 @pytest.mark.anyio

@@ -13,3 +13,6 @@ tests
 .vscode
 *.log
 .env
+models/*.onnx
+models/*.pt
+data/return_images

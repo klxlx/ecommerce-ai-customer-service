@@ -16,6 +16,8 @@ from app.graph.builder import Container, build_graph
 from app.graph.state import AgentState
 from app.schemas.chat import ChatResponse
 from app.services import handoff as handoff_service
+from app.services import semantic_cache as semantic_cache_service
+from app.services import sentinel as sentinel_service
 
 DEFAULT_CONVERSATION_TITLE = "智能客服"
 NEW_CONVERSATION_GREETING = (
@@ -92,6 +94,71 @@ async def run_chat(
     if metrics:
         metrics.increment("chat.request.total")
 
+    # Curated FAQ cache is checked before the graph. It never caches dynamic
+    # order/after-sale/price answers and never stores model-generated answers.
+    cache_hit = await semantic_cache_service.lookup(
+        session,
+        message,
+        container.cache_embeddings or container.providers.embeddings,
+        container.settings,
+    )
+    if cache_hit is not None:
+        entry = cache_hit.entry
+        intent = (
+            "product_knowledge"
+            if entry.kb_type == "product"
+            else "policy_knowledge"
+        )
+        agent_run = await chat_repo.create_agent_run(
+            session,
+            conversation.id,
+            intent,
+            {
+                "semantic_cache": {
+                    "hit": True,
+                    "entry_id": entry.id,
+                    "score": round(cache_hit.score, 4),
+                }
+            },
+        )
+        await chat_repo.create_tool_call_log(
+            session,
+            agent_run.id,
+            tool_name="semantic_cache",
+            arguments={"question": message},
+            result={
+                "entry_id": entry.id,
+                "score": round(cache_hit.score, 4),
+            },
+        )
+        assistant_message = await chat_repo.add_message(
+            session,
+            conversation.id,
+            "assistant",
+            entry.answer,
+            intent=intent,
+            sources=entry.sources,
+            trace_id=agent_run.id,
+        )
+        if conversation.title == DEFAULT_CONVERSATION_TITLE:
+            conversation.title = message[:20] or DEFAULT_CONVERSATION_TITLE
+        await session.commit()
+        if metrics:
+            metrics.increment("semantic_cache.hit.total")
+            metrics.increment("chat.success.total")
+            metrics.observe("chat.latency_ms", 0)
+        return ChatResponse(
+            answer=entry.answer,
+            intent=intent,
+            sources=entry.sources or [],
+            cached=True,
+            trace_id=agent_run.id,
+            conversation_id=conversation.id,
+            message_id=assistant_message.id,
+        )
+    if metrics:
+        metrics.increment("semantic_cache.miss.total")
+
     state: AgentState = {
         "user_message": message,
         "user_id": user.id,
@@ -131,6 +198,33 @@ async def run_chat(
                 "chat.latency_ms", (perf_counter() - started_at) * 1000
             )
 
+    # The sentinel runs outside the graph. It only replaces unsupported /
+    # policy-promise answers; any guard failure fails open.
+    verdict = await sentinel_service.check_answer(
+        container,
+        question=message,
+        answer=str(result.get("answer") or ""),
+        intent=result.get("intent"),
+        sources=result.get("sources"),
+        tool_evidence=result.get("tool_evidence"),
+        grounding_context=str(result.get("grounding_context") or ""),
+    )
+    result["sentinel"] = verdict.trace()
+    if verdict.flagged:
+        result = dict(result)
+        result["answer"] = sentinel_service.SENTINEL_FALLBACK_ANSWER
+        if metrics:
+            metrics.increment(
+                "sentinel.flagged.total",
+                intent=str(result.get("intent") or ""),
+                policy_risk=str(verdict.policy_risk).lower(),
+            )
+    if metrics and verdict.checked:
+        metrics.increment(
+            "sentinel.check.total",
+            outcome="flagged" if verdict.flagged else "passed",
+        )
+
     response = await _persist_result(
         session,
         user,
@@ -161,6 +255,19 @@ async def _persist_result(
     tool_evidence = result.get("tool_evidence") or {}
     handoff_payload = result.get("handoff")
     after_sale_context = result.get("after_sale_context")
+    actions = list(result.get("actions") or [])
+    if (
+        intent == "after_sale"
+        and not handoff_payload
+        and any(term in message for term in ("退货", "换货", "退换"))
+    ):
+        actions = [
+            {
+                "type": "return_request",
+                "label": "申请退换货",
+                "description": "上传商品照片并填写订单信息",
+            }
+        ]
     slots = result.get("slots")
     if slots is None:
         slots = conversation.slots or {}
@@ -249,6 +356,7 @@ async def _persist_result(
         ),
         "knowledge_gap": is_knowledge_gap and not limit_exceeded,
         "ticket_policy": ticket_policy,
+        "sentinel": result.get("sentinel"),
     }
     agent_run = await chat_repo.create_agent_run(session, conversation.id, intent, trace)
     await chat_repo.create_tool_call_log(
@@ -266,6 +374,7 @@ async def _persist_result(
         answer,
         intent=intent,
         sources=sources,
+        actions=actions,
         trace_id=agent_run.id,
         after_sale_context=after_sale_context,
     )
@@ -286,6 +395,7 @@ async def _persist_result(
         answer=answer,
         intent=intent,
         sources=sources,
+        actions=actions,
         trace_id=agent_run.id,
         handoff=handoff_out,
         after_sale=after_sale_context,

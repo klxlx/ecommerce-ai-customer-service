@@ -15,6 +15,7 @@ from sqlalchemy import (
     Boolean,
     Date,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -97,6 +98,8 @@ class ChatMessage(Base, TimestampMixin):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     intent: Mapped[str | None] = mapped_column(String(32), nullable=True)
     sources: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Optional customer-side actions (e.g. the return/exchange card).
+    actions: Mapped[list | None] = mapped_column(JSON, nullable=True)
     after_sale_context: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     trace_id: Mapped[int | None] = mapped_column(
         ForeignKey("agent_runs.id", ondelete="SET NULL"), nullable=True
@@ -325,6 +328,12 @@ class Product(Base, TimestampMixin):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     sku: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
+    model: Mapped[str] = mapped_column(
+        String(120), default="", server_default="", nullable=False
+    )
+    color: Mapped[str] = mapped_column(
+        String(80), default="", server_default="", nullable=False
+    )
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
     price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     stock: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -360,6 +369,12 @@ class OrderItem(Base):
         ForeignKey("products.id", ondelete="RESTRICT"), nullable=False
     )
     product_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    model: Mapped[str] = mapped_column(
+        String(120), default="", server_default="", nullable=False
+    )
+    color: Mapped[str] = mapped_column(
+        String(80), default="", server_default="", nullable=False
+    )
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
     unit_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
 
@@ -446,6 +461,10 @@ class HandoffTicket(Base, TimestampMixin):
     kind: Mapped[str] = mapped_column(
         String(24), default="human", server_default="human", nullable=False
     )
+    # general | return_exchange: return tickets bypass the unresolved cap.
+    category: Mapped[str] = mapped_column(
+        String(32), default="general", server_default="general", nullable=False
+    )
     summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
     # Normalized question + embedding support cross-conversation dedupe.
     question_norm: Mapped[str] = mapped_column(
@@ -482,6 +501,66 @@ class HandoffTicket(Base, TimestampMixin):
     )
 
 
+class ReturnAnalysis(Base, TimestampMixin):
+    """Server-owned photo analysis result; the client only references its id."""
+
+    __tablename__ = "return_analyses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    image_id: Mapped[str] = mapped_column(
+        String(64), unique=True, nullable=False
+    )
+    image_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    result: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    passed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    failure_reason: Mapped[str] = mapped_column(
+        Text, default="", server_default="", nullable=False
+    )
+    consumed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class SemanticCache(Base, TimestampMixin):
+    """Curated FAQ cache; entries are imported, never auto-generated."""
+
+    __tablename__ = "semantic_cache"
+    __table_args__ = (
+        UniqueConstraint(
+            "question_norm", "kb_type", name="uq_semantic_cache_question_kb"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    question_norm: Mapped[str] = mapped_column(
+        String(512), nullable=False, index=True
+    )
+    kb_type: Mapped[str] = mapped_column(
+        String(32), default="policy", server_default="policy", nullable=False
+    )
+    answer: Mapped[str] = mapped_column(Text, nullable=False)
+    sources: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    embedding: Mapped[list[float]] = mapped_column(
+        Vector(EMBEDDING_DIMENSION), nullable=False
+    )
+    hit_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
 # Vector index for child-chunk similarity search.
 Index(
     "ix_knowledge_chunks_embedding",
@@ -495,4 +574,11 @@ Index(
     "ix_handoff_tickets_user_status",
     HandoffTicket.user_id,
     HandoffTicket.status,
+)
+
+Index(
+    "ix_semantic_cache_embedding",
+    SemanticCache.embedding,
+    postgresql_using="hnsw",
+    postgresql_ops={"embedding": "vector_cosine_ops"},
 )

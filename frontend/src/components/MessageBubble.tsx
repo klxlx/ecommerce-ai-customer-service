@@ -1,6 +1,13 @@
+import { Camera } from "lucide-react";
 import type { AfterSaleContext, ChatMessage } from "../api/chat";
 
-export function MessageBubble({ message }: { message: ChatMessage }) {
+export function MessageBubble({
+  message,
+  onReturnRequest,
+}: {
+  message: ChatMessage;
+  onReturnRequest?: () => void;
+}) {
   if (message.role === "system") {
     return <div className="chat-system-notice">{message.content}</div>;
   }
@@ -11,6 +18,15 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
         <div className="message-meta">人工客服</div>
       )}
       <div className="message-bubble">{message.content}</div>
+      {!isUser && onReturnRequest && hasReturnAction(message) && (
+        <button
+          type="button"
+          className="btn btn-secondary return-request-trigger"
+          onClick={onReturnRequest}
+        >
+          <Camera size={16} /> 申请退换货
+        </button>
+      )}
       {!isUser && message.after_sale && (
         <AfterSalePanel afterSale={message.after_sale} />
       )}
@@ -27,6 +43,12 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
         <div className="handoff-notice">已转接人工客服</div>
       )}
     </div>
+  );
+}
+
+function hasReturnAction(message: ChatMessage): boolean {
+  return Boolean(
+    message.actions?.some((action) => action.type === "return_request"),
   );
 }
 

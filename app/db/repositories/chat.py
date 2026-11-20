@@ -90,6 +90,7 @@ async def add_message(
     content: str,
     intent: str | None = None,
     sources: list | None = None,
+    actions: list | None = None,
     trace_id: int | None = None,
     after_sale_context: dict | None = None,
 ) -> ChatMessage:
@@ -99,6 +100,7 @@ async def add_message(
         content=content,
         intent=intent,
         sources=sources,
+        actions=actions,
         trace_id=trace_id,
         after_sale_context=after_sale_context,
     )

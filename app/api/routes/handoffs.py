@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import rate_limit_admin
@@ -17,6 +18,7 @@ from app.schemas.handoff import (
     HandoffUpdate,
 )
 from app.services import handoff as handoff_service
+from app.services import returns as return_service
 
 router = APIRouter()
 
@@ -85,6 +87,23 @@ async def update_handoff(
         raise HTTPException(status_code=404, detail="工单不存在")
     await session.commit()
     return HandoffTicketOut.model_validate(ticket)
+
+
+@router.get("/handoffs/{handoff_id}/return-image")
+async def get_return_image(
+    handoff_id: int,
+    request: Request,
+    _admin: User = Depends(rate_limit_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    path = await return_service.ticket_image_path(
+        session,
+        handoff_id,
+        request.app.state.settings,
+    )
+    if path is None:
+        raise HTTPException(status_code=404, detail="退换货图片不存在")
+    return FileResponse(path, media_type="image/jpeg")
 
 
 @router.get(

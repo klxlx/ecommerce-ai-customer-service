@@ -471,6 +471,7 @@ async def knowledge_node(state: AgentState) -> dict:
     return {
         "answer": answer,
         "sources": [s.__dict__ for s in result.sources],
+        "grounding_context": result.context,
         "tool_evidence": {"kb_type": kb_type, "parent_ids": result.parent_ids},
     }
 

@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../test/render";
 import { MessageBubble } from "../../components/MessageBubble";
 import type { ChatMessage } from "../../api/chat";
@@ -106,6 +107,30 @@ describe("MessageBubble", () => {
     expect(panel).toHaveTextContent("¥899.00");
     expect(panel).toHaveTextContent("价保退款");
     expect(panel).toHaveTextContent(/2026/);
+  });
+
+  it("renders a return request action and invokes the callback", async () => {
+    const onReturnRequest = vi.fn();
+    renderWithProviders(
+      <MessageBubble
+        message={msg({
+          content: "可以申请退换货",
+          actions: [
+            {
+              type: "return_request",
+              label: "申请退换货",
+              description: "上传商品照片",
+            },
+          ],
+        })}
+        onReturnRequest={onReturnRequest}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "申请退换货" }),
+    );
+    expect(onReturnRequest).toHaveBeenCalledOnce();
   });
 
   it("renders an explicit empty after-sale state", () => {

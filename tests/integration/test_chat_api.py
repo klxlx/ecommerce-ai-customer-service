@@ -170,6 +170,7 @@ async def test_streaming_endpoint_emits_tokens_and_done(db_session):
         )
 
     assert resp.status_code == 200
+    assert ": connected" in resp.text
     assert "event: token" in resp.text
     assert "event: done" in resp.text
     done = next(

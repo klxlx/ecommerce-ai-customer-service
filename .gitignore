@@ -46,3 +46,10 @@ $null
 
 # Large binary knowledge sources (130MB PDFs) kept out of git history
 电商知识库文档/
+
+# Local vision weights (download separately, not committed)
+models/*.onnx
+models/*.pt
+
+# Customer return photos are runtime data and may contain PII
+data/return_images/
