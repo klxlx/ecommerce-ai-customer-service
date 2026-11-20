@@ -1,0 +1,47 @@
+[
+  {
+    "question": "退换货政策是什么？",
+    "answer": "请在订单详情页查看最新的退换货规则和可申请状态，以页面展示为准。",
+    "kb_type": "policy",
+    "sources": [
+      {
+        "title": "退换货政策（以订单页面为准）",
+        "source_uri": "",
+        "kb_type": "policy",
+        "parent_id": 0,
+        "chunk_id": 0,
+        "score": 0.0
+      }
+    ]
+  },
+  {
+    "question": "七天无理由退货怎么申请？",
+    "answer": "可在订单详情页的售后入口提交申请，是否符合七天无理由以订单状态和页面规则为准。",
+    "kb_type": "policy",
+    "sources": [
+      {
+        "title": "售后申请入口说明（以订单页面为准）",
+        "source_uri": "",
+        "kb_type": "policy",
+        "parent_id": 0,
+        "chunk_id": 0,
+        "score": 0.0
+      }
+    ]
+  },
+  {
+    "question": "商品参数和说明书在哪里查看？",
+    "answer": "可在商品详情页查看参数，说明书通常随商品包装提供；如缺少配件请联系人工客服核实。",
+    "kb_type": "product",
+    "sources": [
+      {
+        "title": "商品参数与配件说明（以商品页面为准）",
+        "source_uri": "",
+        "kb_type": "product",
+        "parent_id": 0,
+        "chunk_id": 0,
+        "score": 0.0
+      }
+    ]
+  }
+]

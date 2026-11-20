@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
@@ -109,12 +110,23 @@ async def stream_message(
     async def event_stream():
         queue: asyncio.Queue[str] = asyncio.Queue()
         streamed = False
+        streamed_parts: list[str] = []
+        heartbeat_seconds = max(
+            1.0,
+            float(request.app.state.settings.sse_heartbeat_seconds),
+        )
+        last_emit = time.monotonic()
+
+        # Flush headers immediately so gateways and proxies do not buffer the
+        # stream until the first model token arrives.
+        yield ": connected\n\n"
 
         async def emit_token(text: str) -> None:
             nonlocal streamed
             if not text:
                 return
             streamed = True
+            streamed_parts.append(text)
             await queue.put(text)
 
         task = asyncio.create_task(
@@ -135,7 +147,13 @@ async def stream_message(
                 try:
                     token = await asyncio.wait_for(queue.get(), timeout=0.05)
                 except asyncio.TimeoutError:
+                    if time.monotonic() - last_emit >= heartbeat_seconds:
+                        # SSE comment frame: clients ignore it, gateways see
+                        # traffic and keep the connection open.
+                        yield ": heartbeat\n\n"
+                        last_emit = time.monotonic()
                     continue
+                last_emit = time.monotonic()
                 yield _sse("token", {"text": token})
 
             result = await task
@@ -149,6 +167,14 @@ async def stream_message(
                 for chunk in _answer_chunks(result.answer):
                     yield _sse("token", {"text": chunk})
                     await asyncio.sleep(0.012)
+            else:
+                emitted = "".join(streamed_parts).strip()
+                final = result.answer.strip()
+                if emitted != final:
+                    # The graph streams speculatively; ticket dedupe/limit or a
+                    # provider failure can replace the final answer. The client
+                    # must replace the bubble rather than append a second one.
+                    yield _sse("replace", {"text": result.answer})
 
             yield _sse("done", result.model_dump(mode="json"))
         except asyncio.CancelledError:

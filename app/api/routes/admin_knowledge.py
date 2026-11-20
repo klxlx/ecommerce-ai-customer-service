@@ -18,6 +18,7 @@ from app.schemas.knowledge import (
 )
 from app.services import knowledge_admin as knowledge_service
 from app.services import knowledge_import
+from app.services import semantic_cache
 
 router = APIRouter()
 
@@ -115,6 +116,7 @@ async def delete_knowledge(
     deleted = await knowledge_repo.soft_delete_document(session, knowledge_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="知识不存在")
+    await semantic_cache.clear(session)
     await session.commit()
 
 
@@ -136,6 +138,10 @@ async def upsert_knowledge(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
         ) from exc
+    # A published knowledge change invalidates curated FAQ answers that may
+    # now contradict the current policy/product source.
+    await semantic_cache.clear(session)
+    await session.commit()
     return KnowledgeUpsertOut(
         source_key=result.source_key,
         ingestion=result.ingestion,

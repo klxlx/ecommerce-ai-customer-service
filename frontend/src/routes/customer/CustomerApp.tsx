@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "../../auth/AuthContext";
 import { MessageBubble } from "../../components/MessageBubble";
+import { ReturnRequestModal } from "./ReturnRequestModal";
 import {
   formatTimeDivider,
   shouldShowTimeDivider,
@@ -306,6 +307,7 @@ function ChatPanel({
   >(null);
   const [streaming, setStreaming] = useState(false);
   const [streamError, setStreamError] = useState("");
+  const [returnOpen, setReturnOpen] = useState(false);
   const streamAbort = useRef<AbortController | null>(null);
   const queryClient = useQueryClient();
 
@@ -373,6 +375,15 @@ function ChatPanel({
           );
         },
         controller.signal,
+        (text) => {
+          setStreamingMessages((current) =>
+            current
+              ? current.map((message) =>
+                  message.id === -2 ? { ...message, content: text } : message,
+                )
+              : current,
+          );
+        },
       );
 
       const fresh = await listMessages(conversationId);
@@ -470,7 +481,10 @@ function ChatPanel({
                     </div>
                   </div>
                 ) : (
-                  <MessageBubble message={m} />
+                  <MessageBubble
+                    message={m}
+                    onReturnRequest={() => setReturnOpen(true)}
+                  />
                 )}
               </Fragment>
             ))}
@@ -506,6 +520,19 @@ function ChatPanel({
               <Send size={16} />
             </button>
           </footer>
+          {returnOpen && conversationId != null && (
+            <ReturnRequestModal
+              conversationId={conversationId}
+              onClose={() => setReturnOpen(false)}
+              onSubmitted={() => {
+                setReturnOpen(false);
+                queryClient.invalidateQueries({
+                  queryKey: ["messages", conversationId],
+                });
+                queryClient.invalidateQueries({ queryKey: ["conversations"] });
+              }}
+            />
+          )}
         </>
       )}
     </section>

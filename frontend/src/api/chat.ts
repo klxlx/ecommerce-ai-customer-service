@@ -40,12 +40,19 @@ export interface AfterSaleContext {
   handoff_required: boolean;
 }
 
+export interface ChatAction {
+  type: string;
+  label: string;
+  description?: string;
+}
+
 export interface ChatMessage {
   id: number;
   role: "user" | "assistant" | "admin" | "system";
   content: string;
   intent: string | null;
   sources: SourceCitation[] | null;
+  actions?: ChatAction[] | null;
   after_sale?: AfterSaleContext | null;
   created_at: string;
 }
@@ -54,6 +61,8 @@ export interface ChatResponse {
   answer: string;
   intent: string | null;
   sources: SourceCitation[];
+  actions?: ChatAction[];
+  cached?: boolean;
   trace_id: number | null;
   handoff: { id: number; status: string; reason: string } | null;
   after_sale: AfterSaleContext | null;
@@ -107,6 +116,7 @@ export async function sendMessageStream(
   content: string,
   onToken: (text: string) => void,
   signal?: AbortSignal,
+  onReplace?: (text: string) => void,
 ): Promise<ChatResponse> {
   const token = getToken();
   const headers = new Headers({ "Content-Type": "application/json" });
@@ -158,6 +168,9 @@ export async function sendMessageStream(
     if (event === "token") {
       const text = (data as { text?: string }).text;
       if (text) onToken(text);
+    } else if (event === "replace") {
+      const text = (data as { text?: string }).text;
+      if (text) onReplace?.(text);
     } else if (event === "done") {
       completed = data as ChatResponse;
     } else if (event === "error") {

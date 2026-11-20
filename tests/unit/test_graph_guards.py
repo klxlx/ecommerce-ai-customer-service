@@ -319,6 +319,38 @@ async def test_chitchat_limit_then_guidance():
 
 
 @pytest.mark.anyio
+async def test_chitchat_business_guard_does_not_answer_business_query():
+    result = await nodes.chitchat_node(
+        _state(user_message="订单一直没发货", chit_chat_streak=0)
+    )
+    assert "业务问题" in result["answer"]
+    assert "订单号" in result["answer"]
+    assert result["chit_chat_streak"] == 0
+
+
+@pytest.mark.anyio
+async def test_complaint_expression_goes_to_handoff_without_router_call():
+    chat = FakeChat("")
+    result = await nodes.route_node(
+        _state(user_message="我要投诉你们", chat=chat)
+    )
+    assert result["intent"] == "handoff"
+    assert chat.calls == []
+
+
+@pytest.mark.anyio
+async def test_complaint_rule_query_stays_business_knowledge():
+    chat = FakeChat(
+        '{"intent":"policy_knowledge","slots":{}}'
+    )
+    result = await nodes.route_node(
+        _state(user_message="投诉规则是什么", chat=chat)
+    )
+    assert result["intent"] == "policy_knowledge"
+    assert len(chat.calls) == 1
+
+
+@pytest.mark.anyio
 async def test_repeated_clarification_triggers_handoff():
     result = await nodes.clarification_node(
         _state(clarification_attempts=MAX_CLARIFICATION_ATTEMPTS - 1)

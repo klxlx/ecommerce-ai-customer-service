@@ -170,6 +170,7 @@ async def test_streaming_endpoint_emits_tokens_and_done(db_session):
         )
 
     assert resp.status_code == 200
+    assert ": connected" in resp.text
     assert "event: token" in resp.text
     assert "event: done" in resp.text
     done = next(
@@ -514,6 +515,151 @@ async def test_knowledge_not_found_creates_handoff_ticket(
         "kb_type": "policy",
         "status": "not_found",
     }
+
+
+@pytest.mark.anyio
+async def test_third_unresolved_ticket_returns_limit_reply(
+    db_session, monkeypatch
+):
+    user = await create_user(db_session, "ticket-limit-owner")
+    old_a = Conversation(user_id=user.id, title="旧问题一")
+    old_b = Conversation(user_id=user.id, title="旧问题二")
+    db_session.add_all([old_a, old_b])
+    await db_session.flush()
+    db_session.add_all(
+        [
+            HandoffTicket(
+                conversation_id=old_a.id,
+                user_id=user.id,
+                status="open",
+                kind="human",
+                summary="订单一直没发货",
+                slots={},
+                recent_messages=[],
+                evidence={},
+            ),
+            HandoffTicket(
+                conversation_id=old_b.id,
+                user_id=user.id,
+                status="open",
+                kind="knowledge_gap",
+                summary="怎么申请退款",
+                slots={},
+                recent_messages=[],
+                evidence={},
+            ),
+        ]
+    )
+    await db_session.flush()
+    await db_session.commit()
+
+    async def empty_retrieve(*args, **kwargs):
+        return RetrievalResult()
+
+    monkeypatch.setattr(nodes, "retrieve_knowledge", empty_retrieve)
+    container = _make_container(
+        ScriptedChat(
+            {
+                "Mate 90": {
+                    "intent": "policy_knowledge",
+                    "slots": {},
+                }
+            }
+        )
+    )
+
+    async with await _build_client(container) as client:
+        token = await _login(client, "ticket-limit-owner")
+        conversation = (
+            await client.post("/api/conversations", json={}, headers=_auth(token))
+        ).json()
+        response = await client.post(
+            f"/api/conversations/{conversation['id']}/messages",
+            json={"content": "Mate 90 的电池容量是多少？"},
+            headers=_auth(token),
+        )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["handoff"] is None
+    assert body["answer"] == (
+        "抱歉，您的服务需求太多了，我们先处理“订单一直没发货”和“怎么申请退款”问题吧。"
+    )
+
+    factory = create_session_factory(get_settings().database_url)
+    async with factory() as session:
+        tickets = (
+            await session.execute(select(HandoffTicket))
+        ).scalars().all()
+        run = await session.get(AgentRun, body["trace_id"])
+    assert len(tickets) == 2
+    assert run.trace["ticket_policy"]["action"] == "limit_exceeded"
+
+
+@pytest.mark.anyio
+async def test_duplicate_knowledge_gap_does_not_create_second_ticket(
+    db_session, monkeypatch
+):
+    user = await create_user(db_session, "ticket-dedupe-owner")
+    old = Conversation(user_id=user.id, title="旧问题")
+    db_session.add(old)
+    await db_session.flush()
+    db_session.add(
+        HandoffTicket(
+            conversation_id=old.id,
+            user_id=user.id,
+            status="open",
+            kind="knowledge_gap",
+            summary="Mate 90 的电池容量是多少？",
+            slots={},
+            recent_messages=[],
+            evidence={},
+            occurrence_count=1,
+        )
+    )
+    await db_session.flush()
+    await db_session.commit()
+
+    async def empty_retrieve(*args, **kwargs):
+        return RetrievalResult()
+
+    monkeypatch.setattr(nodes, "retrieve_knowledge", empty_retrieve)
+    container = _make_container(
+        ScriptedChat(
+            {
+                "Mate 90": {
+                    "intent": "policy_knowledge",
+                    "slots": {},
+                }
+            }
+        )
+    )
+
+    async with await _build_client(container) as client:
+        token = await _login(client, "ticket-dedupe-owner")
+        conversation = (
+            await client.post("/api/conversations", json={}, headers=_auth(token))
+        ).json()
+        response = await client.post(
+            f"/api/conversations/{conversation['id']}/messages",
+            json={"content": "Mate 90 电池容量"},
+            headers=_auth(token),
+        )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["handoff"] is None
+    assert "学习内容" in body["answer"]
+
+    factory = create_session_factory(get_settings().database_url)
+    async with factory() as session:
+        tickets = (
+            await session.execute(select(HandoffTicket))
+        ).scalars().all()
+        run = await session.get(AgentRun, body["trace_id"])
+    assert len(tickets) == 1
+    assert tickets[0].occurrence_count == 2
+    assert run.trace["ticket_policy"]["action"] == "reused"
 
 
 @pytest.mark.anyio

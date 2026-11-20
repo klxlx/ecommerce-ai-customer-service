@@ -82,6 +82,94 @@ Proactor 事件循环与异步 psycopg 不兼容）。不需要 `--reload`；修
 `knowledge_gap` 工单，只进入工单队列学习，不进入客服回复、不阻断会话；顾客会收到固定提示，
 可换说法继续追问。
 
+同一用户跨会话按“归一化问题 + 语义相似度”去重：同一问题在未解决期间只保留一个工单，
+重复提问复用旧工单并累计次数。每个用户最多同时存在 2 个未解决工单（`human` 与
+`knowledge_gap` 都计入）；超限时不再建单，返回带两个工单摘要的提示。投诉、紧急升级和
+系统故障例外。语义阈值默认 `0.93`，可用 `HANDOFF_DEDUPE_SIMILARITY` 调整；型号、
+订单号、退款/退货类型和否定词会先做冲突守卫，避免把不同问题误合并。
+
+流式回复在 Provider 空闲超时或整轮预算超时后转人工兜底；如果最终答案与已发送 token
+不一致，SSE 会发送 `replace` 事件让前端整体替换气泡，而不是追加。
+
+## MVP：SSE 心跳、哨兵、拍照退换货与语义缓存
+
+### SSE 心跳与网关超时
+
+- 应用在流式响应开始时立即发送 `: connected` 注释帧，之后每 `SSE_HEARTBEAT_SECONDS`
+  秒（默认 15 秒）发送 `: heartbeat`。注释帧不进入前端正文，只用于保持连接。
+- 网关读超时应大于 `CHAT_TOTAL_BUDGET_SECONDS=60` 加心跳间隔，示例值 `300s`；
+  同时关闭 `proxy_buffering`、`gzip`，并设置 `X-Accel-Buffering: no`。
+- 示例配置见 `docs/nginx-sse.conf.example`。当前项目没有真实网关，未修改本机网络配置。
+
+### 异步哨兵
+
+- 位置：回答生成之后、写入会话之前；独立于 LangGraph 主流程。
+- 模型：默认 `ROUTER_MODEL`（与意图模型同档、同阿里云 Key），可用
+  `SENTINEL_MODEL` 单独覆盖。
+- 只判断两件事：回答中的事实性结论是否有检索资料/工具结果支持；是否做出无依据的
+ 价格、退款、退货、赔付、时效或政策承诺。不做通用内容审核。
+- 超时（`SENTINEL_TIMEOUT_SECONDS`，默认 8 秒）、模型异常或 JSON 解析失败时 fail-open，
+  不阻断回答；判定违规时用固定保守文案替换答案，流式场景通过 `replace` 事件下发。
+- 哨兵结果写入 `agent_runs.trace.sentinel`，指标包括 `sentinel.check.total`、
+  `sentinel.flagged.total`。
+
+### 拍照退换货
+
+1. 顾客说“退货/换货/退换货”时，助手消息携带 `actions` 卡片，顾客点击后打开弹窗。
+2. 弹窗上传照片；后端保存去 EXIF 的 JPEG，调用 `VISION_PROVIDER` 配置的视觉分析器。
+3. 当前默认使用预训练 `yolov8n.onnx`（COCO）。它只能识别“手机/杯子/键盘”等通用商品
+   主体，不能识别型号、颜色、配件齐全度和破损类型；这些字段由顾客在弹窗内核对或选择。
+4. 识别置信度低于 `YOLO_CONFIDENCE_THRESHOLD`、未识别到商品主体、或视觉模型不可用时，
+   `passed=false`，**禁止建单**，必须重拍。提交时还会再次校验置信度，并比对订单商品与
+   照片检测类别，防止用无关照片发起退换货。
+5. 顾客填写订单号后，只查询当前用户自己的订单；多商品订单选择其中一件，自动带出商品
+   名称、型号、颜色。商品数据新增了 `products.model/color` 与 `order_items.model/color`。
+6. 顾客填写破损类型、破损程度、退换原因、顾客取件地址和联系电话，勾选“情况属实”后提交。
+7. 创建 `kind=human`、`category=return_exchange` 工单，`evidence.return_request` 保存
+   图片、识别结果、订单商品和表单；退换货工单不占用“每人最多 2 个未解决工单”的名额。
+8. 同一订单 + 同一 SKU + 同一破损类型 + 同一原因，未解决期间按精确业务键去重；不同订单
+   不会因语义相似被合并。
+9. 创建成功后助手回复“已联系管理员，请稍候。”，会话进入人工接待。
+
+接口：
+
+- `POST /api/returns/analyze`（multipart：`conversation_id`、`file`）
+- `GET /api/returns/orders/{order_no}`
+- `POST /api/returns`
+- `GET /api/admin/handoffs/{id}/return-image`（管理员读取原图）
+
+视觉模型可替换：`VISION_PROVIDER=yolo` 当前对应 `YoloOnnxVisionAnalyzer`，后续加
+Qwen-VL 或自训 YOLO 时实现相同的 `VisionAnalyzer.analyze()` 接口并改配置即可，API、
+数据库和前端表单无需改动。
+
+### 语义缓存（Postgres + pgvector）
+
+- 表 `semantic_cache` 保存人工导入的高频问题、答案、来源、embedding、命中次数和过期时间。
+- 只做种子导入，不自动缓存模型生成的回答；订单/物流/售后进度、价格、库存等动态问题
+  直接跳过缓存。
+- 默认阈值 `SEMANTIC_CACHE_SIMILARITY=0.95`，最多取 3 条候选。
+- 缓存问题可以使用独立的 embedding 模型：`SEMANTIC_CACHE_EMBEDDING_MODEL` 留空时跟随
+  `EMBEDDING_MODEL`；如果主模型的免费额度耗尽，可单独设为 `text-embedding-v4`（仍为
+  1024 维），不影响知识库已有向量。更换缓存 embedding 模型后应 `--clear` 并重新导入。
+- 知识库新增/删除知识时自动清空缓存，避免旧政策答案继续命中。
+- 导入方式：
+
+```bash
+# 先按 data/semantic_cache_seed.example.json 准备 50–100 条
+python -m scripts.seed_semantic_cache --file data/semantic_cache_seed.json
+python -m scripts.seed_semantic_cache --file data/semantic_cache_seed.csv
+python -m scripts.seed_semantic_cache --clear
+```
+
+JSON 字段：`question`、`answer`、`kb_type`（`policy`/`product`）、`sources`（数组）、
+可选 `expires_at`（ISO 时间）。CSV 列同名，`sources` 填 JSON 字符串。
+
+### 视觉模型文件
+
+仓库不提交模型权重。首次部署需把 `yolov8n.onnx` 放到 `models/yolov8n.onnx`，或通过
+`YOLO_MODEL_PATH` 指向已有文件。未配置模型时拍照识别接口会返回 `passed=false`，不会
+放行建单。
+
 ## 测试
 
 ```bash

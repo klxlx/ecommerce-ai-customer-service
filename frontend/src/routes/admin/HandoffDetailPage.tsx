@@ -1,8 +1,13 @@
-import { Fragment } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
-import { getHandoff, updateHandoffStatus } from "../../api/admin";
+import {
+  getHandoff,
+  getHandoffReturnImage,
+  updateHandoffStatus,
+} from "../../api/admin";
+import type { HandoffReturnEvidence } from "../../api/admin";
 import {
   readSafeAfterSaleEvidence,
   type SafeAfterSaleEvidence,
@@ -48,6 +53,7 @@ export function HandoffDetailPage() {
   }
 
   const afterSaleContext = readSafeAfterSaleEvidence(ticket);
+  const returnRequest = ticket.evidence?.return_request;
   const slotEntries = Object.entries(ticket.slots || {}).filter(
     ([key, value]) => {
       const slotValue = String(value);
@@ -82,6 +88,9 @@ export function HandoffDetailPage() {
             </span>
             {ticket.kind === "knowledge_gap" && (
               <span className="knowledge-gap-tag">知识缺口</span>
+            )}
+            {ticket.category === "return_exchange" && (
+              <span className="return-exchange-tag">退换货</span>
             )}
           </div>
           <div style={{ display: "flex", gap: 8 }}>
@@ -140,6 +149,7 @@ export function HandoffDetailPage() {
         )}
 
         <AfterSaleDetail context={afterSaleContext} />
+        <ReturnDetail request={returnRequest} handoffId={ticket.id} />
       </div>
     </div>
   );
@@ -244,4 +254,116 @@ function formatAfterSaleTime(value: string): string {
         hour: "2-digit",
         minute: "2-digit",
       });
+}
+
+function ReturnDetail({
+  request,
+  handoffId,
+}: {
+  request?: HandoffReturnEvidence;
+  handoffId: number;
+}) {
+  const [imageUrl, setImageUrl] = useState("");
+  const [imageError, setImageError] = useState("");
+
+  useEffect(() => {
+    if (!request?.image_id) return;
+    let cancelled = false;
+    let objectUrl = "";
+    setImageUrl("");
+    setImageError("");
+    getHandoffReturnImage(handoffId)
+      .then((blob) => {
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setImageUrl(objectUrl);
+      })
+      .catch(() => {
+        if (!cancelled) setImageError("退换货图片加载失败");
+      });
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [handoffId, request?.image_id]);
+
+  if (!request) return null;
+
+  return (
+    <div className="detail-section">
+      <h3>退换货申请</h3>
+      <div className="return-evidence">
+        {imageUrl && (
+          <img
+            className="return-evidence-image"
+            src={imageUrl}
+            alt="顾客上传的退换货商品照片"
+          />
+        )}
+        {imageError && <div className="conversation-time">{imageError}</div>}
+        <div className="return-evidence-grid">
+          <div>
+            <span>订单号</span>
+            <strong>{request.order_no || "（无）"}</strong>
+          </div>
+          <div>
+            <span>商品</span>
+            <strong>{request.product_name || "（无）"}</strong>
+          </div>
+          <div>
+            <span>SKU / 型号 / 颜色</span>
+            <strong>
+              {request.sku || "—"} / {request.model || "未维护"} /{" "}
+              {request.color || "未维护"}
+            </strong>
+          </div>
+          <div>
+            <span>破损类型 / 程度</span>
+            <strong>
+              {request.damage_type || "—"} / {request.damage_level || "—"}
+            </strong>
+          </div>
+          <div>
+            <span>退换原因</span>
+            <strong>{request.reason || "—"}</strong>
+          </div>
+          <div>
+            <span>识别置信度</span>
+            <strong>
+              {request.confidence != null
+                ? `${Math.round(request.confidence * 100)}%`
+                : "—"}
+            </strong>
+          </div>
+          <div>
+            <span>配件情况</span>
+            <strong>
+              {request.accessories?.length
+                ? request.accessories.join("、")
+                : "未填写"}
+            </strong>
+          </div>
+          <div>
+            <span>联系电话</span>
+            <strong>{request.phone || "—"}</strong>
+          </div>
+        </div>
+        <div>
+          <span className="conversation-time">顾客退货地址</span>
+          <div className="return-evidence-note">
+            {request.return_address || "（无）"}
+          </div>
+        </div>
+        {request.detected_objects && request.detected_objects.length > 0 && (
+          <div className="return-evidence-note">
+            视觉识别：
+            {request.detected_objects
+              .map((item) => item.label_zh || item.label || "")
+              .filter(Boolean)
+              .join("、")}
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }

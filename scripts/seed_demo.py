@@ -49,16 +49,16 @@ DEMO_USERS = (
 )
 
 PRODUCTS = [
-    ("EB-PRO", "声动 Pro 无线蓝牙耳机", "299.00", 50),
-    ("TH-450", "恒温智能保温杯", "88.50", 120),
-    ("PB-10000", "疾充 10000mAh 便携充电宝", "129.00", 200),
-    ("AP-320", "清呼吸 家用空气净化器", "899.00", 30),
-    ("KB-87", "静音机械键盘 87 键", "459.00", 40),
-    ("SW-2", "轻氧智能手表 2 代", "1299.00", 25),
-    ("SSD-1T", "疾速 1TB 移动固态硬盘", "699.00", 60),
-    ("TB-200", "声波电动牙刷", "199.00", 150),
-    ("HM-300", "迷你桌面加湿器", "79.00", 180),
-    ("HP-500", "头戴式主动降噪耳机", "599.00", 35),
+    ("EB-PRO", "声动 Pro 无线蓝牙耳机", "299.00", 50, "Pro", "曜石黑"),
+    ("TH-450", "恒温智能保温杯", "88.50", 120, "450ml", "雾灰"),
+    ("PB-10000", "疾充 10000mAh 便携充电宝", "129.00", 200, "10000mAh", "白色"),
+    ("AP-320", "清呼吸 家用空气净化器", "899.00", 30, "320", "白色"),
+    ("KB-87", "静音机械键盘 87 键", "459.00", 40, "87键", "深空灰"),
+    ("SW-2", "轻氧智能手表 2 代", "1299.00", 25, "2代", "曜石黑"),
+    ("SSD-1T", "疾速 1TB 移动固态硬盘", "699.00", 60, "1TB", "银色"),
+    ("TB-200", "声波电动牙刷", "199.00", 150, "200", "薄荷绿"),
+    ("HM-300", "迷你桌面加湿器", "79.00", 180, "300ml", "米白"),
+    ("HP-500", "头戴式主动降噪耳机", "599.00", 35, "500", "黑色"),
 ]
 
 ORDER_DEFS = [
@@ -149,7 +149,7 @@ async def _seed_users(session) -> dict[str, User]:
 
 async def _seed_products(session) -> dict[str, Product]:
     products: dict[str, Product] = {}
-    for sku, name, price, stock in PRODUCTS:
+    for sku, name, price, stock, model, color in PRODUCTS:
         existing = (
             await session.execute(select(Product).where(Product.sku == sku))
         ).scalar_one_or_none()
@@ -157,12 +157,17 @@ async def _seed_products(session) -> dict[str, Product]:
             existing = Product(
                 sku=sku,
                 name=name,
+                model=model,
+                color=color,
                 price=Decimal(price),
                 stock=stock,
                 description="",
             )
             session.add(existing)
             await session.flush()
+        elif not existing.model and not existing.color:
+            existing.model = model
+            existing.color = color
         products[sku] = existing
     await session.commit()
     return products
@@ -202,6 +207,8 @@ async def _seed_orders(
                     order_id=order.id,
                     product_id=product.id,
                     product_name=product.name,
+                    model=product.model,
+                    color=product.color,
                     quantity=qty,
                     unit_price=Decimal(unit),
                 )
@@ -217,6 +224,15 @@ async def _seed_orders(
                 )
             )
         orders[spec["order_no"]] = order
+    # Keep the order snapshot aligned when the demo product metadata is
+    # introduced or corrected after the order was first seeded.
+    products_by_id = {product.id: product for product in products.values()}
+    items = list((await session.execute(select(OrderItem))).scalars().all())
+    for item in items:
+        product = products_by_id.get(item.product_id)
+        if product is not None and (not item.model or not item.color):
+            item.model = product.model
+            item.color = product.color
     await session.commit()
     return orders
 

@@ -30,6 +30,8 @@ class HandoffLiveSessionOut(BaseModel):
     user_id: int
     username: str
     status: HandoffStatus
+    kind: str = "human"
+    category: str = "general"
     assignee_id: int | None = None
     assignee_name: str = ""
     summary: str = ""
@@ -50,6 +52,7 @@ class HandoffTicketOut(BaseModel):
     user_id: int
     status: str
     kind: str = "human"
+    category: str = "general"
     summary: str
     slots: dict = Field(default_factory=dict)
     recent_messages: list = Field(default_factory=list)

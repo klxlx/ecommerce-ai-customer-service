@@ -18,6 +18,8 @@ from app.db.session import create_session_factory
 TABLES = [
     "tool_call_logs",
     "agent_runs",
+    "return_analyses",
+    "semantic_cache",
     "handoff_tickets",
     "chat_messages",
     "logistics_events",

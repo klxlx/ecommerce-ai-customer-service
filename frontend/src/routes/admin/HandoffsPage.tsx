@@ -79,6 +79,9 @@ export function HandoffsPage() {
                     {t.kind === "knowledge_gap" && (
                       <span className="knowledge-gap-tag">知识缺口</span>
                     )}
+                    {t.category === "return_exchange" && (
+                      <span className="return-exchange-tag">退换货</span>
+                    )}
                   </div>
                 </td>
                 <td data-label="状态">

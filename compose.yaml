@@ -25,6 +25,19 @@ services:
       CHAT_API_KEY: "${CHAT_API_KEY:-}"
       DASHSCOPE_API_KEY: "${DASHSCOPE_API_KEY:-}"
       CHAT_MODEL: "${CHAT_MODEL:-qwen-plus}"
+      SSE_HEARTBEAT_SECONDS: "${SSE_HEARTBEAT_SECONDS:-15}"
+      SENTINEL_ENABLED: "${SENTINEL_ENABLED:-1}"
+      SENTINEL_MODEL: "${SENTINEL_MODEL:-}"
+      VISION_PROVIDER: "${VISION_PROVIDER:-yolo}"
+      YOLO_MODEL_PATH: "${YOLO_MODEL_PATH:-models/yolov8n.onnx}"
+      YOLO_CONFIDENCE_THRESHOLD: "${YOLO_CONFIDENCE_THRESHOLD:-0.35}"
+      RETURN_IMAGE_DIR: "${RETURN_IMAGE_DIR:-data/return_images}"
+      SEMANTIC_CACHE_ENABLED: "${SEMANTIC_CACHE_ENABLED:-1}"
+      SEMANTIC_CACHE_SIMILARITY: "${SEMANTIC_CACHE_SIMILARITY:-0.95}"
+      SEMANTIC_CACHE_EMBEDDING_MODEL: "${SEMANTIC_CACHE_EMBEDDING_MODEL:-}"
+    volumes:
+      - ./models:/app/models:ro
+      - return_images:/app/data/return_images
     ports:
       - "8000:8000"
     depends_on:
@@ -33,3 +46,4 @@ services:
 
 volumes:
   pgdata:
+  return_images:

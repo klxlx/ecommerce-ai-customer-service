@@ -44,10 +44,14 @@ async def create_product(
     price: str | Decimal = "100.00",
     stock: int = 10,
     description: str = "",
+    model: str = "",
+    color: str = "",
 ) -> Product:
     product = Product(
         sku=sku,
         name=name,
+        model=model,
+        color=color,
         price=Decimal(price),
         stock=stock,
         description=description,

@@ -47,6 +47,7 @@ class ChatMessageOut(BaseModel):
     content: str
     intent: str | None = None
     sources: list | None = None
+    actions: list | None = None
     after_sale: AfterSaleContextOut | None = Field(
         default=None, validation_alias="after_sale_context"
     )
@@ -61,6 +62,8 @@ class ChatResponse(BaseModel):
     answer: str
     intent: str | None = None
     sources: list = Field(default_factory=list)
+    actions: list = Field(default_factory=list)
+    cached: bool = False
     trace_id: int | None = None
     handoff: dict | None = None
     after_sale: AfterSaleContextOut | None = None

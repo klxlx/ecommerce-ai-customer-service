@@ -89,11 +89,13 @@ def _register_routes(app: FastAPI) -> None:
         auth,
         chat,
         handoffs,
+        returns,
         weather_mcp,
     )
 
     app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
     app.include_router(chat.router, prefix="/api", tags=["chat"])
+    app.include_router(returns.router, prefix="/api", tags=["returns"])
     app.include_router(
         admin_knowledge.router,
         prefix="/api/admin",
