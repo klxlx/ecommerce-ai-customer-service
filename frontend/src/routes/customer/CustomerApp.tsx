@@ -373,6 +373,15 @@ function ChatPanel({
           );
         },
         controller.signal,
+        (text) => {
+          setStreamingMessages((current) =>
+            current
+              ? current.map((message) =>
+                  message.id === -2 ? { ...message, content: text } : message,
+                )
+              : current,
+          );
+        },
       );
 
       const fresh = await listMessages(conversationId);

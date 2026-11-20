@@ -68,6 +68,14 @@ class Settings(BaseSettings):
     )
     rerank_model: str = Field(default="text-rerank-v1", validation_alias="RERANK_MODEL")
 
+    # Handoff ticket policy
+    handoff_dedupe_similarity: float = Field(
+        default=0.93, validation_alias="HANDOFF_DEDUPE_SIMILARITY"
+    )
+    handoff_max_unresolved: int = Field(
+        default=2, validation_alias="HANDOFF_MAX_UNRESOLVED"
+    )
+
     # Auth
     session_ttl_hours: int = Field(default=24, validation_alias="SESSION_TTL_HOURS")
     login_failure_limit: int = Field(

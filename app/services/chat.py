@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from time import perf_counter
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import ProviderError
+from app.core.errors import ProviderError, ProviderTimeoutError
 from app.core.metrics import MetricsRegistry
 from app.db.models import User
 from app.db.repositories import chat as chat_repo
@@ -23,6 +24,7 @@ NEW_CONVERSATION_GREETING = (
 PROVIDER_FAILURE_ANSWER = (
     "抱歉，智能客服暂时不可用，已为您转接人工客服，请稍候。"
 )
+DUPLICATE_TICKET_REPLY = "您反馈的这个问题已经在处理中，请稍候。"
 
 
 def _llm_history_message(message) -> dict:
@@ -112,7 +114,13 @@ async def run_chat(
     started_at = perf_counter()
     provider_failed = False
     try:
-        result = await graph.ainvoke(state)
+        async with asyncio.timeout(container.settings.chat_total_budget_seconds):
+            result = await graph.ainvoke(state)
+    except TimeoutError:
+        provider_failed = True
+        error = ProviderTimeoutError("chat", "turn budget exceeded")
+        _record_provider_failure(metrics, error)
+        result = _provider_failure_result(conversation.slots or {}, error)
     except ProviderError as error:
         provider_failed = True
         _record_provider_failure(metrics, error)
@@ -129,6 +137,7 @@ async def run_chat(
         conversation,
         message,
         result,
+        container,
     )
     if metrics:
         metrics.increment(
@@ -144,6 +153,7 @@ async def _persist_result(
     conversation,
     message: str,
     result: dict,
+    container: Container,
 ) -> ChatResponse:
     intent = result.get("intent")
     answer = result.get("answer") or "抱歉，我暂时无法处理您的请求。"
@@ -165,8 +175,68 @@ async def _persist_result(
         else 0
     )
 
-    # Persist the agent run trace.
     is_knowledge_gap = intent == "knowledge_gap"
+    ticket_policy: dict | None = None
+    handoff_out = None
+    limit_exceeded = False
+
+    if handoff_payload:
+        reason = str(handoff_payload.get("reason") or "")
+        threshold = tool_evidence.get("threshold")
+        exception = handoff_service.is_ticket_limit_exception(message, reason)
+        if isinstance(threshold, dict) and threshold.get("exceeded") is True:
+            exception = True
+        if "provider_failure" in tool_evidence:
+            exception = True
+        try:
+            ticket_result = await handoff_service.create_or_reuse_ticket(
+                session,
+                conversation_id=conversation.id,
+                user_id=user.id,
+                question=message,
+                summary=handoff_payload.get("summary", message),
+                slots=handoff_payload.get("slots", {}),
+                recent_messages=[{"role": "user", "content": message}],
+                evidence=handoff_payload.get("evidence", {}),
+                kind="knowledge_gap" if is_knowledge_gap else "human",
+                exception=exception,
+                settings=container.settings,
+                embeddings=container.providers.embeddings,
+            )
+            ticket = ticket_result.ticket
+            ticket_policy = {
+                "action": "reused" if ticket_result.duplicate else "created",
+                "ticket_id": ticket.id,
+                "active_count": ticket_result.active_count,
+                "similarity": (
+                    round(ticket_result.similarity, 4)
+                    if ticket_result.similarity is not None
+                    else None
+                ),
+                "escalated": ticket_result.escalated,
+            }
+            if not is_knowledge_gap:
+                if ticket_result.duplicate and not ticket_result.escalated:
+                    answer = DUPLICATE_TICKET_REPLY
+                handoff_out = {
+                    "id": ticket.id,
+                    "status": ticket.status,
+                    "reason": reason,
+                }
+        except handoff_service.HandoffLimitExceeded as error:
+            limit_exceeded = True
+            answer = handoff_service.ticket_limit_reply(error.tickets)
+            ticket_policy = {
+                "action": "limit_exceeded",
+                "ticket_ids": [ticket.id for ticket in error.tickets],
+                "active_count": len(error.tickets),
+            }
+            # The graph produced a handoff payload, but no ticket was created.
+            # Clear it so callers and metrics do not report a false transfer.
+            result["handoff"] = None
+            handoff_payload = None
+
+    result["ticket_policy"] = ticket_policy
     trace = {
         "intent": intent,
         "slots": slots,
@@ -174,10 +244,11 @@ async def _persist_result(
         "tool_evidence": tool_evidence,
         "handoff_reason": (
             None
-            if is_knowledge_gap
+            if is_knowledge_gap or limit_exceeded
             else handoff_payload.get("reason") if handoff_payload else None
         ),
-        "knowledge_gap": is_knowledge_gap,
+        "knowledge_gap": is_knowledge_gap and not limit_exceeded,
+        "ticket_policy": ticket_policy,
     }
     agent_run = await chat_repo.create_agent_run(session, conversation.id, intent, trace)
     await chat_repo.create_tool_call_log(
@@ -208,26 +279,6 @@ async def _persist_result(
     )
     if conversation.title == DEFAULT_CONVERSATION_TITLE:
         conversation.title = message[:20] or DEFAULT_CONVERSATION_TITLE
-
-    handoff_out = None
-    if handoff_payload:
-        ticket = await handoff_service.create_ticket(
-            session,
-            conversation_id=conversation.id,
-            user_id=user.id,
-            summary=handoff_payload.get("summary", message),
-            slots=handoff_payload.get("slots", {}),
-            recent_messages=[{"role": "user", "content": message}],
-            evidence=handoff_payload.get("evidence", {}),
-            kind="knowledge_gap" if is_knowledge_gap else "human",
-        )
-        handoff_out = None
-        if not is_knowledge_gap:
-            handoff_out = {
-                "id": ticket.id,
-                "status": ticket.status,
-                "reason": handoff_payload.get("reason", ""),
-            }
 
     await session.commit()
 
@@ -304,13 +355,21 @@ def _record_turn_metrics(metrics: MetricsRegistry, result: dict) -> None:
             ),
         )
 
-    if handoff:
-        metrics.increment(
-            "handoff.created.total",
-            reason=_handoff_reason(handoff, evidence),
-        )
+    policy = result.get("ticket_policy") or {}
+    action = policy.get("action")
+    reason = (
+        "knowledge_unavailable"
+        if intent == "knowledge_gap"
+        else _handoff_reason(handoff, evidence) if handoff else "other"
+    )
+    if action == "created":
+        metrics.increment("handoff.created.total", reason=reason)
         if intent == "knowledge_gap":
             metrics.increment("knowledge_gap.created.total")
+    elif action == "reused":
+        metrics.increment("handoff.deduplicated.total", reason=reason)
+    elif action == "limit_exceeded":
+        metrics.increment("handoff.limit_exceeded.total", reason=reason)
 
 
 def _tool_outcome(

@@ -447,6 +447,19 @@ class HandoffTicket(Base, TimestampMixin):
         String(24), default="human", server_default="human", nullable=False
     )
     summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    # Normalized question + embedding support cross-conversation dedupe.
+    question_norm: Mapped[str] = mapped_column(
+        String(512), default="", server_default="", nullable=False
+    )
+    question_embedding: Mapped[list[float] | None] = mapped_column(
+        Vector(EMBEDDING_DIMENSION), nullable=True
+    )
+    occurrence_count: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
+    )
+    last_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     slots: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     recent_messages: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     evidence: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
@@ -475,4 +488,11 @@ Index(
     KnowledgeChunk.embedding,
     postgresql_using="hnsw",
     postgresql_ops={"embedding": "vector_cosine_ops"},
+)
+
+# Fast unresolved-ticket lookup for per-user dedupe and ticket limits.
+Index(
+    "ix_handoff_tickets_user_status",
+    HandoffTicket.user_id,
+    HandoffTicket.status,
 )

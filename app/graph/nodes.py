@@ -13,6 +13,8 @@ from decimal import Decimal, InvalidOperation
 from app.graph.router import (
     extract_order_no,
     is_after_sale_progress_query,
+    is_complaint_or_urgent,
+    is_complaint_policy_query,
     is_explicit_handoff,
     is_greeting,
     is_new_after_sale_request,
@@ -61,6 +63,9 @@ CHITCHAT_GUIDANCE = (
     "我们还是聊聊您需要的帮助吧～您可以咨询商品、交易规则，"
     "或提供订单号查询进度。如需人工服务，请回复「转人工」。"
 )
+CHITCHAT_BUSINESS_GUARD = (
+    "这个问题需要按业务问题处理，请补充具体订单号或商品名称，我继续帮您查询。"
+)
 WEATHER_CITY_REQUIRED = (
     "请告诉我您想查询的城市，我再帮您看天气。"
     "您也可以继续咨询商品、订单或售后问题。"
@@ -98,6 +103,10 @@ _ORDER_LIST_PATTERN = re.compile(
     r"|我(?:都)?(?:有|下过)(?:哪些|什么)订单"
     r"|订单(?:列表|清单)"
     r"|(?:全部|所有)订单"
+)
+_BUSINESS_GUARD_PATTERN = re.compile(
+    r"(订单|物流|快递|发货|退款|退货|换货|售后|价格|多少钱|库存|有货|"
+    r"商品|型号|sku|保修|发票|优惠|运费|支付|付款)"
 )
 
 
@@ -336,7 +345,12 @@ async def route_node(state: AgentState) -> dict:
         return pending
     if is_greeting(user_message):
         return {"intent": "greeting", "slots": _clear_pending(existing_slots)}
-    if is_explicit_handoff(user_message):
+    # "投诉规则/怎么投诉" is a policy question; only an actual complaint or
+    # urgent escalation goes straight to handoff. This guard prevents the
+    # router from confusing the two common phrasings.
+    if not is_complaint_policy_query(user_message) and (
+        is_explicit_handoff(user_message) or is_complaint_or_urgent(user_message)
+    ):
         return {"intent": "handoff", "slots": _clear_pending(existing_slots)}
     if is_after_sale_progress_query(user_message) or is_new_after_sale_request(
         user_message
@@ -855,10 +869,32 @@ async def after_sale_node(state: AgentState) -> dict:
     }
 
 
+def _truncate_at_sentence(text: str, max_chars: int) -> str:
+    """Trim to the last sentence boundary before ``max_chars``."""
+    cleaned = text.strip()
+    if len(cleaned) <= max_chars:
+        return cleaned
+    window = cleaned[:max_chars]
+    best = -1
+    for marker in ("。", "！", "？", "!", "?", "；", ";", "\n"):
+        index = window.rfind(marker)
+        if index > best:
+            best = index
+    if best >= max_chars // 2:
+        return window[: best + 1].rstrip()
+    return window.rstrip()
+
+
 async def chitchat_node(state: AgentState) -> dict:
     streak = state.get("chit_chat_streak", 0)
     if streak >= CHIT_CHAT_LIMIT:
         return {"answer": CHITCHAT_GUIDANCE, "chit_chat_streak": streak}
+
+    user_message = state.get("user_message", "").strip()
+    if _BUSINESS_GUARD_PATTERN.search(user_message):
+        # The router should have sent this to a business node. If it did not,
+        # do not let the chitchat model invent an answer for a business query.
+        return {"answer": CHITCHAT_BUSINESS_GUARD, "chit_chat_streak": streak}
 
     chitchat_agent = getattr(state.get("agents"), "chitchat", None)
     # Legacy unit tests invoke this node without the runtime agent registry.
@@ -868,7 +904,6 @@ async def chitchat_node(state: AgentState) -> dict:
             "chit_chat_streak": streak + 1,
         }
 
-    user_message = state.get("user_message", "").strip()
     facts: dict = {}
     tool_evidence: dict = {}
 
@@ -928,7 +963,7 @@ async def chitchat_node(state: AgentState) -> dict:
     )
     model = getattr(chitchat_agent, "model", None)
     answer = await _complete_answer(state, messages, model=model, max_chars=200)
-    answer = answer.strip()[:200]
+    answer = _truncate_at_sentence(answer, 200)
     if not answer:
         answer = "您好，我在呢。请问今天有什么可以帮您？"
 

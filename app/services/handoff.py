@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
+import math
+import re
+import unicodedata
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Any
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import Settings
 from app.db.models import ChatMessage, HandoffTicket, User
 from app.db.repositories import auth as auth_repo
 from app.db.repositories import chat as chat_repo
 from app.db.repositories import handoff as handoff_repo
+from app.graph.router import is_complaint_or_urgent
 
 
 class HandoffError(Exception):
@@ -31,6 +39,323 @@ class HandoffConflict(HandoffError):
 
 class HandoffForbidden(HandoffError):
     """The caller is not the administrator who owns this ticket."""
+
+
+class HandoffLimitExceeded(HandoffError):
+    """The user already has the maximum number of unresolved tickets."""
+
+    def __init__(self, tickets: list[HandoffTicket]) -> None:
+        super().__init__("handoff limit exceeded")
+        self.tickets = tickets
+
+
+@dataclass
+class TicketCreationResult:
+    """Outcome of creating or reusing a handoff ticket."""
+
+    ticket: HandoffTicket
+    created: bool
+    duplicate: bool
+    escalated: bool
+    similarity: float | None
+    active_count: int
+
+
+MAX_UNRESOLVED_TICKETS = 2
+DEFAULT_DEDUPE_SIMILARITY = 0.93
+MAX_SUMMARY_CHARS = 26
+
+_QUESTION_PREFIX = re.compile(
+    r"^(?:请问|想问一下|想问|我想问|我想咨询|咨询一下|帮我|请帮我|麻烦|劳驾)\s*"
+)
+_HANDOFF_CANONICAL = re.compile(
+    r"^(?:我要|我想|请|麻烦|帮我|找|联系)?"
+    r"(?:转人工|人工客服|人工服务|人工)\s*$"
+)
+_MODEL_TOKEN = re.compile(r"([a-z]{2,}\d{2,}[a-z0-9]*)")
+_ORDER_TOKEN = re.compile(r"([a-z]{2,}[-_]?\d{4,})")
+_SERVICE_TERMS = ("退货退款", "退款", "退货", "换货", "售后")
+_PROPERTY_TERMS = (
+    "电池容量",
+    "续航",
+    "屏幕尺寸",
+    "屏幕",
+    "相机",
+    "拍照",
+    "内存",
+    "存储",
+    "重量",
+    "尺寸",
+    "充电",
+    "发热",
+    "保修",
+    "价格",
+    "库存",
+)
+_PROPERTY_SYNONYMS = {
+    "发烫": "发热",
+    "电池多大": "电池容量",
+    "电量": "电池容量",
+}
+_NEGATION = re.compile(r"(?:不|没|未|无|不能|无法|不可)")
+_COMPLAINT_ACTION = re.compile(
+    r"(我要投诉|投诉你们|已经投诉|投诉过|举报|12315|消协|工商|起诉|报警|欺诈|欺骗|骗子)"
+)
+_URGENT = re.compile(r"(紧急|加急|急事|马上处理|立刻处理|人身安全|安全问题)")
+
+
+def normalize_question(text: str) -> str:
+    """Normalize a customer question for exact and semantic comparison."""
+    normalized = unicodedata.normalize("NFKC", text or "").lower()
+    normalized = re.sub(r"\s+", "", normalized)
+    normalized = _QUESTION_PREFIX.sub("", normalized)
+    normalized = re.sub(r"[^\w\u4e00-\u9fff]+", "", normalized)
+    normalized = normalized.strip("_").replace("的", "")
+    normalized = re.sub(
+        r"(?:是多少|多少|是什么|怎么样|怎么办|怎么弄|吗|呢|呀|啊|吧)$",
+        "",
+        normalized,
+    )
+    if _HANDOFF_CANONICAL.match(normalized):
+        return "转人工"
+    return normalized
+
+
+def ticket_limit_reply(tickets: list[HandoffTicket]) -> str:
+    """Build the customer-facing message when the unresolved limit is hit."""
+    summaries: list[str] = []
+    for ticket in tickets[:MAX_UNRESOLVED_TICKETS]:
+        summary = " ".join((ticket.summary or "").split()).strip()
+        if not summary:
+            summary = "已有问题"
+        if len(summary) > MAX_SUMMARY_CHARS:
+            summary = f"{summary[:MAX_SUMMARY_CHARS].rstrip('，,。；;、')}…"
+        summaries.append(summary)
+    quoted = "和".join(f"“{summary}”" for summary in summaries)
+    return f"抱歉，您的服务需求太多了，我们先处理{quoted}问题吧。"
+
+
+def _cosine(left: list[float] | None, right: list[float] | None) -> float | None:
+    if not left or not right or len(left) != len(right):
+        return None
+    dot = math.fsum(a * b for a, b in zip(left, right))
+    norm_left = math.sqrt(math.fsum(a * a for a in left))
+    norm_right = math.sqrt(math.fsum(b * b for b in right))
+    if norm_left == 0 or norm_right == 0:
+        return None
+    return dot / (norm_left * norm_right)
+
+
+def _models(text: str) -> set[str]:
+    return set(_MODEL_TOKEN.findall(normalize_question(text)))
+
+
+def _orders(text: str) -> set[str]:
+    return set(_ORDER_TOKEN.findall(normalize_question(text)))
+
+
+def _service_terms(text: str) -> set[str]:
+    raw = text or ""
+    found = {term for term in _SERVICE_TERMS if term in raw}
+    return found
+
+
+def _property_terms(text: str) -> set[str]:
+    raw = text or ""
+    for source, target in _PROPERTY_SYNONYMS.items():
+        if source in raw:
+            found = {target}
+            for term in _PROPERTY_TERMS:
+                if term in raw:
+                    found.add(term)
+            return found & set(_PROPERTY_TERMS)
+    return {term for term in _PROPERTY_TERMS if term in raw}
+
+
+def _has_negation(text: str) -> bool:
+    return bool(_NEGATION.search(text or ""))
+
+
+def _same_question(
+    left_text: str,
+    right_text: str,
+    left_embedding: list[float] | None,
+    right_embedding: list[float] | None,
+    *,
+    threshold: float,
+) -> tuple[bool, float | None]:
+    left_norm = normalize_question(left_text)
+    right_norm = normalize_question(right_text)
+    if not left_norm or not right_norm:
+        return False, None
+    if left_norm == right_norm:
+        return True, 1.0
+
+    left_models = _models(left_text)
+    right_models = _models(right_text)
+    if left_models and right_models and left_models != right_models:
+        return False, None
+
+    left_orders = _orders(left_text)
+    right_orders = _orders(right_text)
+    if left_orders and right_orders and left_orders != right_orders:
+        return False, None
+
+    left_service = _service_terms(left_text)
+    right_service = _service_terms(right_text)
+    if left_service and right_service and left_service != right_service:
+        return False, None
+
+    left_property = _property_terms(left_text)
+    right_property = _property_terms(right_text)
+    if left_property and right_property and left_property != right_property:
+        return False, None
+
+    if _has_negation(left_text) != _has_negation(right_text):
+        return False, None
+
+    similarity = _cosine(left_embedding, right_embedding)
+    if similarity is None:
+        return False, None
+    return similarity >= threshold, similarity
+
+
+async def _embed(embeddings: Any, text: str) -> list[float] | None:
+    if embeddings is None or not text:
+        return None
+    try:
+        return await embeddings.embed_query(text)
+    except Exception:
+        # Dedupe must never block ticket creation when the embedding provider
+        # is unavailable. Exact normalized matching still applies.
+        return None
+
+
+def is_ticket_limit_exception(message: str, reason: str) -> bool:
+    """Complaints, urgent cases, and system failures bypass the unresolved cap."""
+    if is_complaint_or_urgent(message):
+        return True
+    return reason in {
+        "provider_failure",
+        "threshold_exceeded",
+        "tool_failure",
+        "工具查询失败",
+        "多次澄清失败",
+    }
+
+
+async def create_or_reuse_ticket(
+    session: AsyncSession,
+    *,
+    conversation_id: int,
+    user_id: int,
+    question: str,
+    summary: str,
+    slots: dict,
+    recent_messages: list,
+    evidence: dict,
+    kind: str = "human",
+    exception: bool = False,
+    settings: Settings | None = None,
+    embeddings: Any = None,
+) -> TicketCreationResult:
+    """Enforce per-user question dedupe and the unresolved-ticket limit."""
+    threshold = (
+        settings.handoff_dedupe_similarity
+        if settings is not None
+        else DEFAULT_DEDUPE_SIMILARITY
+    )
+    max_unresolved = (
+        settings.handoff_max_unresolved
+        if settings is not None
+        else MAX_UNRESOLVED_TICKETS
+    )
+    now = datetime.now(timezone.utc)
+    question_norm = normalize_question(question)
+    query_embedding = await _embed(embeddings, question)
+    # Serialize ticket decisions per user so two concurrent turns cannot both
+    # pass the duplicate check and create the same question twice.
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(CAST(:key AS bigint))"),
+        {"key": user_id},
+    )
+    active = await handoff_repo.list_unresolved_for_user(session, user_id)
+
+    duplicate: HandoffTicket | None = None
+    duplicate_similarity: float | None = None
+    for ticket in active:
+        ticket_text = ticket.summary or ""
+        ticket_embedding = ticket.question_embedding
+        if ticket_embedding is None:
+            ticket_embedding = await _embed(embeddings, ticket_text)
+            if ticket_embedding is not None:
+                ticket.question_embedding = ticket_embedding
+        same, similarity = _same_question(
+            question,
+            ticket_text,
+            query_embedding,
+            ticket_embedding,
+            threshold=threshold,
+        )
+        if same:
+            duplicate = ticket
+            duplicate_similarity = similarity
+            break
+
+    if duplicate is not None:
+        duplicate.occurrence_count = (duplicate.occurrence_count or 1) + 1
+        duplicate.last_seen_at = now
+        if duplicate.question_norm == "":
+            duplicate.question_norm = question_norm
+        if duplicate.question_embedding is None and query_embedding is not None:
+            duplicate.question_embedding = query_embedding
+        escalated = kind == "human" and duplicate.kind == "knowledge_gap"
+        if escalated:
+            # An explicit human request on an existing knowledge gap escalates
+            # the same ticket instead of creating a second one.
+            duplicate.kind = "human"
+            duplicate.status = "open"
+            duplicate.summary = summary or duplicate.summary
+            duplicate.slots = slots or duplicate.slots
+            duplicate.evidence = evidence or duplicate.evidence
+            duplicate.resolved_at = None
+            duplicate.close_reason = ""
+            duplicate.resolution_note = ""
+        await session.flush()
+        return TicketCreationResult(
+            ticket=duplicate,
+            created=False,
+            duplicate=True,
+            escalated=escalated,
+            similarity=duplicate_similarity,
+            active_count=len(active),
+        )
+
+    if len(active) >= max_unresolved and not exception:
+        raise HandoffLimitExceeded(active[:max_unresolved])
+
+    ticket = await handoff_repo.create_handoff(
+        session,
+        conversation_id=conversation_id,
+        user_id=user_id,
+        summary=summary,
+        slots=slots,
+        recent_messages=recent_messages,
+        evidence=evidence,
+        kind=kind,
+        question_norm=question_norm,
+        question_embedding=query_embedding,
+        occurrence_count=1,
+        last_seen_at=now,
+    )
+    return TicketCreationResult(
+        ticket=ticket,
+        created=True,
+        duplicate=False,
+        escalated=False,
+        similarity=None,
+        active_count=len(active) + 1,
+    )
 
 
 def _utc(value: datetime | None) -> datetime | None:

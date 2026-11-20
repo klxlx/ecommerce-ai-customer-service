@@ -20,6 +20,10 @@ async def create_handoff(
     evidence: dict,
     status: str = "open",
     kind: str = "human",
+    question_norm: str = "",
+    question_embedding: list[float] | None = None,
+    occurrence_count: int = 1,
+    last_seen_at: datetime | None = None,
 ) -> HandoffTicket:
     ticket = HandoffTicket(
         conversation_id=conversation_id,
@@ -30,10 +34,29 @@ async def create_handoff(
         slots=slots,
         recent_messages=recent_messages,
         evidence=evidence,
+        question_norm=question_norm,
+        question_embedding=question_embedding,
+        occurrence_count=occurrence_count,
+        last_seen_at=last_seen_at,
     )
     session.add(ticket)
     await session.flush()
     return ticket
+
+
+async def list_unresolved_for_user(
+    session: AsyncSession, user_id: int
+) -> list[HandoffTicket]:
+    """Return every ticket still occupying the user's unresolved quota."""
+    result = await session.execute(
+        select(HandoffTicket)
+        .where(
+            HandoffTicket.user_id == user_id,
+            HandoffTicket.status.in_(("open", "in_progress")),
+        )
+        .order_by(HandoffTicket.created_at.asc(), HandoffTicket.id.asc())
+    )
+    return list(result.scalars().all())
 
 
 async def list_handoffs(

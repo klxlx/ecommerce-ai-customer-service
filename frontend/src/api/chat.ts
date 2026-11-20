@@ -107,6 +107,7 @@ export async function sendMessageStream(
   content: string,
   onToken: (text: string) => void,
   signal?: AbortSignal,
+  onReplace?: (text: string) => void,
 ): Promise<ChatResponse> {
   const token = getToken();
   const headers = new Headers({ "Content-Type": "application/json" });
@@ -158,6 +159,9 @@ export async function sendMessageStream(
     if (event === "token") {
       const text = (data as { text?: string }).text;
       if (text) onToken(text);
+    } else if (event === "replace") {
+      const text = (data as { text?: string }).text;
+      if (text) onReplace?.(text);
     } else if (event === "done") {
       completed = data as ChatResponse;
     } else if (event === "error") {

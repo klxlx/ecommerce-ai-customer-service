@@ -109,12 +109,14 @@ async def stream_message(
     async def event_stream():
         queue: asyncio.Queue[str] = asyncio.Queue()
         streamed = False
+        streamed_parts: list[str] = []
 
         async def emit_token(text: str) -> None:
             nonlocal streamed
             if not text:
                 return
             streamed = True
+            streamed_parts.append(text)
             await queue.put(text)
 
         task = asyncio.create_task(
@@ -149,6 +151,14 @@ async def stream_message(
                 for chunk in _answer_chunks(result.answer):
                     yield _sse("token", {"text": chunk})
                     await asyncio.sleep(0.012)
+            else:
+                emitted = "".join(streamed_parts).strip()
+                final = result.answer.strip()
+                if emitted != final:
+                    # The graph streams speculatively; ticket dedupe/limit or a
+                    # provider failure can replace the final answer. The client
+                    # must replace the bubble rather than append a second one.
+                    yield _sse("replace", {"text": result.answer})
 
             yield _sse("done", result.model_dump(mode="json"))
         except asyncio.CancelledError:
