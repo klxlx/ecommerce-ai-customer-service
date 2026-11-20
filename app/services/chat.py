@@ -21,6 +21,22 @@ PROVIDER_FAILURE_ANSWER = (
 )
 
 
+def _llm_history_message(message) -> dict:
+    """Convert a persisted message into a provider-safe chat message.
+
+    Human-agent replies are stored with ``role="admin"`` so the UI can label
+    them, but OpenAI-compatible providers only accept system/user/assistant
+    roles. Without this mapping a single handoff reply makes every later turn
+    fail with a 400 error.
+    """
+    if message.role == "admin":
+        return {"role": "assistant", "content": f"[人工客服] {message.content}"}
+    if message.role == "system":
+        return {"role": "assistant", "content": f"[系统] {message.content}"}
+    role = "user" if message.role == "user" else "assistant"
+    return {"role": role, "content": message.content}
+
+
 async def run_chat(
     session: AsyncSession,
     user: User,
@@ -62,7 +78,7 @@ async def run_chat(
         )
 
     prior_messages = await chat_repo.list_messages(session, conversation.id)
-    history = [{"role": m.role, "content": m.content} for m in prior_messages]
+    history = [_llm_history_message(m) for m in prior_messages]
 
     # Persist the user message first.
     await chat_repo.add_message(session, conversation.id, "user", message)

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import {
   useMutation,
   useQuery,
@@ -362,8 +362,15 @@ function ChatPanel({
                 你好，我是智能客服，有什么可以帮您？
               </div>
             )}
-            {messages?.map((m) => (
-              <MessageBubble key={m.id} message={m} />
+            {messages?.map((m, index) => (
+              <Fragment key={m.id}>
+                {shouldShowTimeDivider(messages, index) && (
+                  <div className="chat-time-divider">
+                    {formatTimeDivider(m.created_at)}
+                  </div>
+                )}
+                <MessageBubble message={m} />
+              </Fragment>
             ))}
             {sendMutation.isPending && (
               <div className="message assistant">
@@ -404,7 +411,37 @@ function ChatPanel({
   );
 }
 
+const TIME_DIVIDER_MS = 5 * 60 * 1000;
+
+function shouldShowTimeDivider(
+  messages: ChatMessage[],
+  index: number,
+): boolean {
+  if (index === 0) return false;
+  const previous = new Date(messages[index - 1].created_at).getTime();
+  const current = new Date(messages[index].created_at).getTime();
+  if (Number.isNaN(previous) || Number.isNaN(current)) return false;
+  return current - previous >= TIME_DIVIDER_MS;
+}
+
+function formatTimeDivider(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const now = new Date();
+  const clock = date.toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  if (date.toDateString() === now.toDateString()) {
+    return clock;
+  }
+  return `${date.getMonth() + 1}月${date.getDate()}日 ${clock}`;
+}
+
 export function MessageBubble({ message }: { message: ChatMessage }) {
+  if (message.role === "system") {
+    return <div className="chat-system-notice">{message.content}</div>;
+  }
   const isUser = message.role === "user";
   return (
     <div className={`message ${message.role}`}>

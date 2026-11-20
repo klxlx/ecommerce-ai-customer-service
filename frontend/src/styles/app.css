@@ -1337,3 +1337,237 @@ pre.evidence {
     grid-template-columns: 1fr;
   }
 }
+
+/* ---------- Human-agent live console ---------- */
+.live-console {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.live-notice {
+  margin: 0;
+}
+.live-grid {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: var(--space-4);
+  min-height: calc(100vh - 190px);
+}
+.live-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.live-group h3 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0 var(--space-2);
+  font-size: 14px;
+  color: var(--text-muted);
+}
+.live-count {
+  display: inline-flex;
+  min-width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.live-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  padding: 12px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+.live-item:hover {
+  border-color: var(--border-strong, var(--border));
+}
+.live-item.active {
+  border-color: var(--cobalt);
+  box-shadow: 0 0 0 1px var(--cobalt) inset;
+}
+.live-item-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.live-item-preview {
+  color: var(--text-muted);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.live-item-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.live-detail {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+.live-empty {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-muted);
+  padding: var(--space-6);
+}
+.live-detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+.live-customer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.live-summary {
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 13px;
+  max-width: 520px;
+}
+.live-head-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.live-alert {
+  margin: 8px var(--space-4) 0;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  background: #fdecec;
+}
+.live-alert-muted {
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+.live-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.live-system {
+  align-self: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.live-composer {
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.live-composer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.live-composer-locked {
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+}
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(24, 28, 40, 0.45);
+}
+.live-release-modal {
+  width: min(520px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.message-time {
+  margin-top: 2px;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+/* ---------- Customer chat time divider ---------- */
+.chat-time-divider {
+  align-self: center;
+  margin: 6px 0;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-faint);
+  font-size: 12px;
+}
+.chat-system-notice {
+  align-self: center;
+  max-width: 88%;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+@media (max-width: 900px) {
+  .live-grid {
+    grid-template-columns: 1fr;
+    min-height: 0;
+  }
+  .live-detail {
+    min-height: 60vh;
+  }
+  .live-detail-head {
+    flex-direction: column;
+  }
+  .live-head-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}

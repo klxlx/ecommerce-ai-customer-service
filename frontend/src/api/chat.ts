@@ -42,7 +42,7 @@ export interface AfterSaleContext {
 
 export interface ChatMessage {
   id: number;
-  role: "user" | "assistant" | "admin";
+  role: "user" | "assistant" | "admin" | "system";
   content: string;
   intent: string | null;
   sources: SourceCitation[] | null;

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from datetime import datetime, timezone
+
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import HandoffTicket
+from app.db.models import ChatMessage, HandoffTicket
 
 
 async def create_handoff(
@@ -71,3 +73,85 @@ async def update_status(
     # Reload the server-side onupdate timestamp so callers can serialize it.
     await session.refresh(ticket)
     return ticket
+
+
+async def list_active(session: AsyncSession) -> list[HandoffTicket]:
+    """Return tickets that still need a human: waiting or being handled."""
+    result = await session.execute(
+        select(HandoffTicket)
+        .where(HandoffTicket.status.in_(("open", "in_progress")))
+        .order_by(HandoffTicket.created_at.asc())
+    )
+    return list(result.scalars().all())
+
+
+async def claim(
+    session: AsyncSession, handoff_id: int, admin_id: int
+) -> bool:
+    """Atomically move an ``open`` ticket to ``in_progress``.
+
+    Returns ``False`` when the ticket is missing or already claimed by someone
+    else, so two administrators can never share one conversation.
+    """
+    result = await session.execute(
+        update(HandoffTicket)
+        .where(
+            HandoffTicket.id == handoff_id,
+            or_(
+                HandoffTicket.status == "open",
+                and_(
+                    HandoffTicket.status == "in_progress",
+                    HandoffTicket.assignee_id.is_(None),
+                ),
+            )
+        )
+        .values(
+            status="in_progress",
+            assignee_id=admin_id,
+            claimed_at=datetime.now(timezone.utc),
+        )
+    )
+    return result.rowcount == 1
+
+
+async def latest_messages(
+    session: AsyncSession, conversation_ids: list[int]
+) -> dict[int, ChatMessage]:
+    """Return the newest message per conversation for the live session list."""
+    if not conversation_ids:
+        return {}
+    ranked = (
+        select(
+            ChatMessage.id.label("message_id"),
+            func.row_number()
+            .over(
+                partition_by=ChatMessage.conversation_id,
+                order_by=ChatMessage.id.desc(),
+            )
+            .label("row_number"),
+        )
+        .where(ChatMessage.conversation_id.in_(conversation_ids))
+        .subquery()
+    )
+    result = await session.execute(
+        select(ChatMessage)
+        .join(ranked, ChatMessage.id == ranked.c.message_id)
+        .where(ranked.c.row_number == 1)
+    )
+    return {
+        message.conversation_id: message
+        for message in result.scalars().all()
+    }
+
+
+async def message_counts(
+    session: AsyncSession, conversation_ids: list[int]
+) -> dict[int, int]:
+    if not conversation_ids:
+        return {}
+    result = await session.execute(
+        select(ChatMessage.conversation_id, func.count(ChatMessage.id))
+        .where(ChatMessage.conversation_id.in_(conversation_ids))
+        .group_by(ChatMessage.conversation_id)
+    )
+    return {conversation_id: count for conversation_id, count in result.all()}

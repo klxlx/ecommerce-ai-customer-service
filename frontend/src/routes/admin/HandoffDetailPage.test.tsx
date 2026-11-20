@@ -146,7 +146,7 @@ describe("HandoffDetailPage after-sale context", () => {
       "可以为您申请 20 元优惠券。",
     );
     await userEvent.click(
-      screen.getByRole("button", { name: "发送并交回智能体" }),
+      screen.getByRole("button", { name: "发送回复" }),
     );
 
     expect(mockedSendHandoffReply).toHaveBeenCalledWith(
@@ -154,7 +154,7 @@ describe("HandoffDetailPage after-sale context", () => {
       "可以为您申请 20 元优惠券。",
     );
     expect(
-      await screen.findByText("已发送，会话已自动交回智能体"),
+      await screen.findByText("已发送，会话保持进行中，可在「人工回复」继续跟进"),
     ).toBeInTheDocument();
   });
 });

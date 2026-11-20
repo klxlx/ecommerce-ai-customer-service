@@ -5,7 +5,7 @@
 订单进度查询三大核心业务，支持多轮对话记忆、闲聊管控与人工兜底。
 
 - 顾客端：`/app` —— 登录、多轮对话、来源溯源、转人工
-- 管理端：`/admin` —— 工单队列、工单详情与状态流转、知识库、运行日志
+- 管理端：`/admin` —— 工单队列（历史台账）、人工回复工作台、知识库、运行日志
 - 健康检查：`GET /health`
 
 ## 技术栈
@@ -45,6 +45,7 @@ cp .env.example .env              # 修改 DATABASE_URL
 
 alembic upgrade head
 MOCK_PROVIDERS=1 python -m scripts.seed_demo
+# 只灌业务数据、暂不索引 10 份大 PDF：SEED_INDEX_KNOWLEDGE=0 python -m scripts.seed_demo
 python -m scripts.serve --host 127.0.0.1 --port 8000   # 后端 :8000（无需 --reload）
 
 cd frontend
@@ -63,8 +64,15 @@ Proactor 事件循环与异步 psycopg 不兼容）。不需要 `--reload`；修
 
 | 用户名 | 密码 | 角色 |
 | --- | --- | --- |
-| `customer` | `password123` | 顾客 |
-| `admin` | `password123` | 管理员 |
+| `customer` | `password123` | 顾客（张伟） |
+| `customer2` | `password123` | 顾客（林小雨） |
+| `customer3` | `password123` | 顾客（赵子航） |
+| `admin` | `password123` | 管理员（王敏） |
+| `admin2` | `password123` | 管理员（陈晨） |
+
+管理端「人工回复」是独立工作台：顾客转人工后会话出现在待接入列表，点击接入即独占该会话，
+可查看完整历史并连续回复；右上角「退出人工回复」需填写处理结论，提交后会话交还智能体，
+工单转为已解决并保留在「工单队列」作为历史台账。
 
 ## 测试
 

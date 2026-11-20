@@ -90,11 +90,20 @@ test.describe("admin console", () => {
 
     const adminReply = `人工客服已收到，请放心。${Date.now()}`;
     await page.getByLabel("人工回复").fill(adminReply);
-    await page.getByRole("button", { name: "发送并交回智能体" }).click();
+    await page.getByRole("button", { name: "发送回复" }).click();
     await expect(
-      page.getByText("已发送，会话已自动交回智能体"),
+      page.getByText("已发送，会话保持进行中，可在「人工回复」继续跟进"),
     ).toBeVisible();
-    await expect(page.locator(".pill-resolved")).toHaveText("已解决");
+    await expect(page.locator(".pill-in_progress")).toHaveText("处理中");
+
+    await page.goto("/admin/live");
+    await page.locator(".live-item").first().click();
+    await page.getByRole("button", { name: "退出人工回复" }).click();
+    await page.getByPlaceholder("例如：").fill("已核实并答复，交还智能体。");
+    await page.getByRole("button", { name: "确认交还智能体" }).click();
+    await expect(
+      page.getByText("已退出人工回复，会话已交还智能体。"),
+    ).toBeVisible();
 
     await page.evaluate(() => localStorage.clear());
     await login(page, "customer");

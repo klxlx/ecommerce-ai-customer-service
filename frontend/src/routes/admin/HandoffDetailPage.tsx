@@ -1,12 +1,11 @@
 import { Fragment, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Send } from "lucide-react";
+import { ArrowLeft, MessagesSquare, Send } from "lucide-react";
 import {
   getHandoff,
   listHandoffMessages,
   sendHandoffReply,
-  updateHandoffStatus,
 } from "../../api/admin";
 import type { ChatMessage } from "../../api/chat";
 import {
@@ -45,16 +44,6 @@ export function HandoffDetailPage() {
     refetchInterval: 3000,
   });
 
-  const updateMutation = useMutation({
-    mutationFn: (status: string) => updateHandoffStatus(handoffId, status),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ["admin", "handoff", handoffId],
-      });
-      queryClient.invalidateQueries({ queryKey: ["admin", "handoffs"] });
-    },
-  });
-
   const replyMutation = useMutation({
     mutationFn: (content: string) => sendHandoffReply(handoffId, content),
     onMutate: () => {
@@ -73,7 +62,7 @@ export function HandoffDetailPage() {
       });
       queryClient.invalidateQueries({ queryKey: ["admin", "handoffs"] });
       setReply("");
-      setReplyNotice("已发送，会话已自动交回智能体");
+      setReplyNotice("已发送，会话保持进行中，可在「人工回复」继续跟进");
     },
   });
 
@@ -125,17 +114,10 @@ export function HandoffDetailPage() {
           <div style={{ display: "flex", gap: 8 }}>
             <button
               className="btn btn-secondary"
-              disabled={ticket.status === "in_progress"}
-              onClick={() => updateMutation.mutate("in_progress")}
+              onClick={() => navigate("/admin/live")}
             >
-              标记处理中
-            </button>
-            <button
-              className="btn btn-primary"
-              disabled={ticket.status === "resolved"}
-              onClick={() => updateMutation.mutate("resolved")}
-            >
-              标记已解决
+              <MessagesSquare size={16} />
+              进入人工回复
             </button>
           </div>
         </div>
@@ -203,8 +185,14 @@ export function HandoffDetailPage() {
               rows={3}
               value={reply}
               maxLength={4000}
+              disabled={ticket.status === "resolved"}
               onChange={(event) => setReply(event.target.value)}
             />
+            {ticket.status === "resolved" && (
+              <div className="conversation-time">
+                该工单已结束，如需继续沟通请让顾客重新发起会话。
+              </div>
+            )}
             {replyMutation.error && (
               <div className="error-text" role="alert">
                 回复发送失败，请稍后重试
@@ -217,11 +205,15 @@ export function HandoffDetailPage() {
             )}
             <button
               className="btn btn-primary"
-              disabled={!reply.trim() || replyMutation.isPending}
+              disabled={
+                !reply.trim() ||
+                replyMutation.isPending ||
+                ticket.status === "resolved"
+              }
               onClick={() => replyMutation.mutate(reply.trim())}
             >
               <Send size={16} />
-              发送并交回智能体
+              发送回复
             </button>
           </div>
         </div>
