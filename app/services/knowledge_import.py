@@ -12,7 +12,7 @@ from typing import Protocol
 
 from app.services.knowledge_metadata import detect_knowledge_metadata
 
-MAX_FILE_BYTES = 20 * 1024 * 1024
+MAX_FILE_BYTES = 30 * 1024 * 1024
 SUPPORTED_EXTENSIONS = frozenset(
     {".txt", ".md", ".markdown", ".docx", ".pdf", ".png", ".jpg", ".jpeg", ".webp"}
 )
@@ -133,7 +133,7 @@ def preview_knowledge_file(
     if not safe_name:
         raise InvalidKnowledgeFileError("请选择需要转换的知识文件")
     if len(data) > MAX_FILE_BYTES:
-        raise KnowledgeFileTooLargeError("文件不能超过 20 MB")
+        raise KnowledgeFileTooLargeError("文件不能超过 30 MB")
     if not data:
         raise InvalidKnowledgeFileError("文件内容为空")
 
