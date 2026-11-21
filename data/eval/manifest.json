@@ -1,0 +1,49 @@
+{
+  "generated_at": "2026-11-21T06:30:08.188082+00:00",
+  "seed": 20261121,
+  "sources": {
+    "intent": "生成器/data/ecom/ecom_v2_200m.jsonl",
+    "tool": "生成器/data/multi_industry/supplement_v2.jsonl",
+    "negative": [
+      "多场景数据集\\data.jsonl",
+      "售后维权数据集\\data.jsonl",
+      "物流查询数据集\\data.jsonl"
+    ],
+    "faq": [
+      "多场景数据集\\data.jsonl",
+      "售后维权数据集\\data.jsonl",
+      "物流查询数据集\\data.jsonl",
+      "data\\knowledge\\policies\\dispute-policy.md",
+      "data\\knowledge\\policies\\return-policy.md",
+      "data\\knowledge\\policies\\shipping-policy.md",
+      "data\\knowledge\\policies\\warranty-policy.md",
+      "data\\knowledge\\products\\air-purifier.md",
+      "data\\knowledge\\products\\earbuds-pro.md",
+      "data\\knowledge\\products\\power-bank.md",
+      "data\\knowledge\\products\\smart-thermos.md"
+    ]
+  },
+  "counts": {
+    "intent": 300,
+    "tool": 200,
+    "sentinel_negative": 50,
+    "sentinel_positive": 50,
+    "faq": 100,
+    "faq_policy": 48,
+    "faq_product": 52
+  },
+  "excluded": {
+    "多轮对话数据集": "包含手机号、姓名和详细地址；未复制到派生资产",
+    "商品回复数据集": "样本小且含承诺性话术；未用于 FAQ 候选"
+  },
+  "licenses": {
+    "生成器": "Apache-2.0（数据），MIT（生成器）",
+    "多场景/售后/物流": "Apache-2.0（合成数据）",
+    "知识库": "项目自带演示文档"
+  },
+  "notes": [
+    "生成器标签为 synthetic-v2，工具名与本项目工具不同；tool 数据仅用于能力评测。",
+    "FAQ answer_draft 只从官方知识库章节摘录，未采用合成客服 bot 回答。",
+    "FAQ 均为 pending，未写入 semantic_cache。"
+  ]
+}
