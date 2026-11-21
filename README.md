@@ -12,7 +12,7 @@
 
 - 后端：Python 3.14、FastAPI、LangChain、LangGraph、SQLAlchemy 2、Alembic、psycopg 3
 - 数据库：PostgreSQL 16 + PGVector（1024 维向量）
-- 模型：OpenAI 兼容对话模型（默认 `qwen-plus`）、DashScope `text-embedding-v3`、`text-rerank-v1`
+- 模型：OpenAI 兼容对话模型（默认 `qwen-plus`）、DashScope `text-embedding-v4`、`text-rerank-v1`
 - 前端：React 19、TypeScript、Vite、React Router、TanStack Query、Lucide React
 
 ## 快速开始
@@ -142,15 +142,30 @@ Proactor 事件循环与异步 psycopg 不兼容）。不需要 `--reload`；修
 Qwen-VL 或自训 YOLO 时实现相同的 `VisionAnalyzer.analyze()` 接口并改配置即可，API、
 数据库和前端表单无需改动。
 
+### 知识库重建（不删除原数据）
+
+- 入库失败原因先查 `knowledge_document_versions.failure_reason`。`embedding:quota_exceeded`
+  表示 DashScope 免费额度耗尽，不是 API Key 错误；`embedding:authentication` 才是 Key
+  无效。
+- 切换 embedding 模型后**不需要删除知识库**。运行 `python -m scripts.rebuild_knowledge`
+  会原地重算已发布文档的向量，保留文档、来源和版本；同时会重试当前没有有效版本的
+  活跃 PDF，并重算活跃工单的问题向量。
+- 重建脚本按版本提交，失败可重复执行；已发布内容在重建完成前仍保持可读。
+
+```bash
+python -m scripts.rebuild_knowledge
+python -m scripts.rebuild_knowledge --skip-handoffs
+python -m scripts.rebuild_knowledge --skip-reembed   # 只重试失败文档
+```
+
 ### 语义缓存（Postgres + pgvector）
 
 - 表 `semantic_cache` 保存人工导入的高频问题、答案、来源、embedding、命中次数和过期时间。
 - 只做种子导入，不自动缓存模型生成的回答；订单/物流/售后进度、价格、库存等动态问题
   直接跳过缓存。
 - 默认阈值 `SEMANTIC_CACHE_SIMILARITY=0.95`，最多取 3 条候选。
-- 缓存问题可以使用独立的 embedding 模型：`SEMANTIC_CACHE_EMBEDDING_MODEL` 留空时跟随
-  `EMBEDDING_MODEL`；如果主模型的免费额度耗尽，可单独设为 `text-embedding-v4`（仍为
-  1024 维），不影响知识库已有向量。更换缓存 embedding 模型后应 `--clear` 并重新导入。
+- 默认使用与知识库相同的 `text-embedding-v4`（1024 维）；确实需要隔离时可用
+  `SEMANTIC_CACHE_EMBEDDING_MODEL` 单独指定，更换后应 `--clear` 并重新导入。
 - 知识库新增/删除知识时自动清空缓存，避免旧政策答案继续命中。
 - 导入方式：
 
