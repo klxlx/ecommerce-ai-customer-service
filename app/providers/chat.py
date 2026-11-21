@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
 from typing import Protocol
 
 from openai import (
@@ -40,6 +42,12 @@ class ChatProvider(Protocol):
         messages: list[dict],
         model: str | None = None,
     ) -> str: ...
+
+    def stream(
+        self,
+        messages: list[dict],
+        model: str | None = None,
+    ) -> AsyncIterator[str]: ...
 
 
 class OpenAICompatChat:
@@ -106,6 +114,62 @@ class OpenAICompatChat:
             policy=self._policy,
             metrics=self._metrics,
         )
+
+    async def stream(
+        self,
+        messages: list[dict],
+        model: str | None = None,
+    ) -> AsyncIterator[str]:
+        """Yield content deltas from the provider's streaming endpoint."""
+        if not self._configured:
+            raise ProviderAuthenticationError(
+                "chat", "CHAT_API_KEY is not configured"
+            )
+        stream = None
+        try:
+            stream = await self._client.chat.completions.create(
+                model=model or self._model,
+                messages=messages,
+                temperature=0.2,
+                stream=True,
+            )
+            iterator = stream.__aiter__()
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + self._policy.total_budget_seconds
+            while True:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise ProviderTimeoutError(
+                        "chat", "stream total budget exceeded"
+                    )
+                timeout = min(
+                    self._policy.attempt_timeout_seconds,
+                    remaining,
+                )
+                try:
+                    async with asyncio.timeout(timeout):
+                        chunk = await iterator.__anext__()
+                except StopAsyncIteration:
+                    break
+                except TimeoutError as exc:
+                    raise ProviderTimeoutError(
+                        "chat", "stream idle timeout"
+                    ) from exc
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    yield delta
+        except OpenAIError as exc:
+            raise _map_openai_error(exc) from exc
+        finally:
+            if stream is not None:
+                close = getattr(stream, "close", None)
+                if callable(close):
+                    try:
+                        await close()
+                    except Exception:
+                        pass
 
 
 def _map_openai_error(error: OpenAIError) -> ProviderError:

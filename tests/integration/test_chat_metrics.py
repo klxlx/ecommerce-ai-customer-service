@@ -165,7 +165,7 @@ async def test_knowledge_unavailable_records_stable_handoff_reason(
         )
 
     assert response.status_code == 200
-    assert response.json()["intent"] == "handoff"
+    assert response.json()["intent"] == "knowledge_gap"
     snapshot = app.state.metrics.snapshot()
     assert snapshot["counters"]["handoff.created.total"][
         "reason=knowledge_unavailable"

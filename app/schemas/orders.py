@@ -10,6 +10,8 @@ from pydantic import BaseModel
 
 class OrderItemFact(BaseModel):
     product_name: str
+    model: str = ""
+    color: str = ""
     quantity: int
     unit_price: Decimal
 

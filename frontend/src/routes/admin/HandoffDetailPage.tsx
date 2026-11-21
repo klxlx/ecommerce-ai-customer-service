@@ -1,14 +1,14 @@
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Send } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import {
   getHandoff,
-  listHandoffMessages,
-  sendHandoffReply,
+  getHandoffReturnImage,
   updateHandoffStatus,
 } from "../../api/admin";
-import type { ChatMessage } from "../../api/chat";
+import type { HandoffReturnEvidence } from "../../api/admin";
+import { useAuth } from "../../auth/AuthContext";
 import {
   readSafeAfterSaleEvidence,
   type SafeAfterSaleEvidence,
@@ -20,29 +20,104 @@ const STATUS_LABEL: Record<string, string> = {
   resolved: "已解决",
 };
 
+const SLOT_LABEL: Record<string, string> = {
+  order_no: "订单号",
+  order_item_id: "订单商品 ID",
+  product: "商品",
+  product_name: "商品名称",
+  sku: "SKU",
+  model: "型号",
+  color: "颜色",
+  after_sale_action: "售后动作",
+  service_type: "售后类型",
+  last_handoff: "最近一次人工交接",
+  query_scope: "查询范围",
+  pending_intent: "待补充意图",
+  missing_slot: "缺少信息",
+  damage_type: "破损类型",
+  damage_level: "破损程度",
+  reason: "退换原因",
+  accessories: "配件情况",
+  return_address: "退货地址",
+  phone: "联系电话",
+  refund_amount: "退款金额",
+  refund_method: "退款方式",
+  refund_status: "退款状态",
+  tracking_no: "物流单号",
+  logistics_status: "物流状态",
+  ticket_id: "工单号",
+  note: "处理说明",
+  resolved_at: "处理时间",
+};
+
+const SLOT_VALUE_LABEL: Record<string, string> = {
+  new_request: "新建售后申请",
+  list: "订单列表",
+  single: "单笔订单",
+  order: "订单查询",
+  price_stock: "价格与库存查询",
+  product_knowledge: "商品咨询",
+  after_sale: "售后咨询",
+  refund: "退款",
+  return: "退货",
+  exchange: "换货",
+  complaint: "投诉",
+  handoff: "转人工",
+  knowledge_gap: "知识缺口",
+  true: "是",
+  false: "否",
+};
+
+function formatSlotDateTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("zh-CN", { hour12: false });
+}
+
+function formatSlotValue(key: string, value: unknown): string {
+  if (value === null || value === undefined || value === "") return "—";
+
+  if (key === "last_handoff" && typeof value === "object" && !Array.isArray(value)) {
+    const item = value as Record<string, unknown>;
+    const parts: string[] = [];
+    if (item.ticket_id !== null && item.ticket_id !== undefined) {
+      parts.push(`工单 #${item.ticket_id}`);
+    }
+    if (item.note) parts.push(String(item.note));
+    if (item.resolved_at) parts.push(formatSlotDateTime(String(item.resolved_at)));
+    return parts.length > 0 ? parts.join(" · ") : "—";
+  }
+
+  if (Array.isArray(value)) {
+    return value.length > 0
+      ? value.map((item) => formatSlotValue("", item)).join("、")
+      : "—";
+  }
+
+  if (typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>)
+      .map(
+        ([childKey, childValue]) =>
+          `${SLOT_LABEL[childKey] || childKey}：${formatSlotValue(childKey, childValue)}`,
+      )
+      .join("；");
+  }
+
+  const text = String(value);
+  return SLOT_VALUE_LABEL[text] || text;
+}
+
 export function HandoffDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { user } = useAuth();
   const handoffId = Number(id);
-  const [reply, setReply] = useState("");
-  const [replyNotice, setReplyNotice] = useState("");
 
   const { data: ticket, isLoading, error } = useQuery({
     queryKey: ["admin", "handoff", handoffId],
     queryFn: () => getHandoff(handoffId),
     enabled: !Number.isNaN(handoffId),
-  });
-
-  const {
-    data: messages,
-    isLoading: messagesLoading,
-    error: messagesError,
-  } = useQuery({
-    queryKey: ["admin", "handoff", handoffId, "messages"],
-    queryFn: () => listHandoffMessages(handoffId),
-    enabled: !Number.isNaN(handoffId),
-    refetchInterval: 3000,
   });
 
   const updateMutation = useMutation({
@@ -52,28 +127,6 @@ export function HandoffDetailPage() {
         queryKey: ["admin", "handoff", handoffId],
       });
       queryClient.invalidateQueries({ queryKey: ["admin", "handoffs"] });
-    },
-  });
-
-  const replyMutation = useMutation({
-    mutationFn: (content: string) => sendHandoffReply(handoffId, content),
-    onMutate: () => {
-      setReplyNotice("");
-    },
-    onSuccess: (message) => {
-      queryClient.setQueryData(
-        ["admin", "handoff", handoffId, "messages"],
-        (current: ChatMessage[] | undefined) => [
-          ...(current || []),
-          message,
-        ],
-      );
-      queryClient.invalidateQueries({
-        queryKey: ["admin", "handoff", handoffId],
-      });
-      queryClient.invalidateQueries({ queryKey: ["admin", "handoffs"] });
-      setReply("");
-      setReplyNotice("已发送，会话已自动交回智能体");
     },
   });
 
@@ -89,6 +142,30 @@ export function HandoffDetailPage() {
   }
 
   const afterSaleContext = readSafeAfterSaleEvidence(ticket);
+  const returnRequest = ticket.evidence?.return_request;
+  const isInternal =
+    ticket.kind === "internal" || ticket.kind === "knowledge_gap";
+  const isKnowledgeGap = ticket.kind === "knowledge_gap";
+  const isToolFailure =
+    ticket.kind === "internal" &&
+    ticket.evidence?.internal_kind === "tool_failure";
+  const canResolveInternal =
+    isInternal && ticket.status !== "resolved";
+  const canTakeOver =
+    !isInternal &&
+    (ticket.status === "open" ||
+      (ticket.status === "in_progress" && ticket.assignee_id == null));
+  const requiresClaim =
+    ticket.category === "return_exchange" || ticket.category === "refund";
+  const canResolve =
+    !isInternal &&
+    ticket.status !== "resolved" &&
+    (!requiresClaim ||
+      (ticket.status === "in_progress" && ticket.assignee_id === user?.id));
+  const statusLabel =
+    ticket.kind === "internal" && ticket.status === "resolved"
+      ? "已处理"
+      : STATUS_LABEL[ticket.status] || ticket.status;
   const slotEntries = Object.entries(ticket.slots || {}).filter(
     ([key, value]) => {
       const slotValue = String(value);
@@ -119,26 +196,103 @@ export function HandoffDetailPage() {
           <div>
             <h2 className="admin-title">工单 #{ticket.id}</h2>
             <span className={`pill pill-${ticket.status}`}>
-              {STATUS_LABEL[ticket.status] || ticket.status}
+              {statusLabel}
             </span>
+            {ticket.kind === "knowledge_gap" && (
+              <span className="knowledge-gap-tag">知识缺口</span>
+            )}
+            {ticket.kind === "internal" && (
+              <span className="knowledge-gap-tag">内部异常</span>
+            )}
+            {ticket.category === "return_exchange" && (
+              <span className="return-exchange-tag">退换货</span>
+            )}
+            {ticket.category === "refund" && (
+              <span className="return-exchange-tag">退款</span>
+            )}
+            {ticket.business_status && (
+              <span className="return-exchange-tag">
+                {ticket.business_status}
+              </span>
+            )}
           </div>
           <div style={{ display: "flex", gap: 8 }}>
-            <button
-              className="btn btn-secondary"
-              disabled={ticket.status === "in_progress"}
-              onClick={() => updateMutation.mutate("in_progress")}
-            >
-              标记处理中
-            </button>
-            <button
-              className="btn btn-primary"
-              disabled={ticket.status === "resolved"}
-              onClick={() => updateMutation.mutate("resolved")}
-            >
-              标记已解决
-            </button>
+            {isInternal && canResolveInternal && (
+              <button
+                className="btn btn-primary"
+                title={
+                  isKnowledgeGap
+                    ? "确认缺失知识已补全"
+                    : "确认工具异常已修复"
+                }
+                disabled={updateMutation.isPending}
+                onClick={() => updateMutation.mutate("resolved")}
+              >
+                {updateMutation.isPending
+                  ? "处理中…"
+                  : isKnowledgeGap
+                    ? "已解决"
+                    : "已处理"}
+              </button>
+            )}
+            {!isInternal && (
+              <>
+                <button
+                  className="btn btn-secondary"
+                  disabled={!canTakeOver || updateMutation.isPending}
+                  onClick={() => updateMutation.mutate("in_progress")}
+                >
+                  {ticket.status === "in_progress" ? "重新接入" : "标记处理中"}
+                </button>
+                <button
+                  className="btn btn-primary"
+                  disabled={!canResolve || updateMutation.isPending}
+                  onClick={() => updateMutation.mutate("resolved")}
+                >
+                  标记已解决
+                </button>
+              </>
+            )}
           </div>
         </div>
+
+        {!isInternal && (
+          <div className="conversation-time">
+            接待人：
+            {ticket.assignee_name ||
+              (ticket.status === "resolved" ? "—" : "待接入")}
+          </div>
+        )}
+
+        {isInternal && canResolveInternal && (
+          <div className="conversation-time">
+            {isKnowledgeGap
+              ? "确认缺失知识已补全后点击「已解决」。"
+              : isToolFailure
+                ? "确认工具异常已修复后点击「已处理」。"
+                : "确认内部异常已处理完后点击「已处理」。"}
+          </div>
+        )}
+
+        {ticket.resolved_by_name && (
+          <div className="conversation-time">
+            完成人：{ticket.resolved_by_name}
+          </div>
+        )}
+        {requiresClaim &&
+          ticket.status === "in_progress" &&
+          ticket.assignee_id != null &&
+          ticket.assignee_id !== user?.id && (
+            <div className="cs-alert cs-alert-muted">
+              该退换货/退款工单由其他客服接入，需由其本人解决。
+            </div>
+          )}
+
+        {updateMutation.error && (
+          <div className="error-text" role="alert">
+            状态更新失败，请稍后重试
+          </div>
+        )}
 
         <div className="detail-section">
           <h3>需求摘要</h3>
@@ -150,8 +304,8 @@ export function HandoffDetailPage() {
           <dl className="kv">
             {slotEntries.map(([k, v]) => (
               <Fragment key={k}>
-                <dt>{k}</dt>
-                <dd>{String(v)}</dd>
+                <dt>{SLOT_LABEL[k] || k}</dt>
+                <dd>{formatSlotValue(k, v)}</dd>
               </Fragment>
             ))}
           </dl>
@@ -160,73 +314,29 @@ export function HandoffDetailPage() {
           )}
         </div>
 
-        <div className="detail-section handoff-conversation">
-          <h3>会话记录</h3>
-          <div className="handoff-message-list" aria-live="polite">
-            {messagesLoading && (
-              <div className="state-box">
-                <div className="spinner" />
-              </div>
-            )}
-            {messagesError && (
-              <div className="error-text">会话加载失败，请稍后重试</div>
-            )}
-            {!messagesLoading &&
-              !messagesError &&
-              (messages || []).map((message) => (
-                <div
-                  key={message.id}
-                  className={`message ${message.role}`}
-                >
-                  <div className="message-meta">
-                    {message.role === "user"
-                      ? "顾客"
-                      : message.role === "admin"
-                        ? "人工客服"
-                        : "智能客服"}
-                  </div>
-                  <div className="message-bubble">{message.content}</div>
-                </div>
-              ))}
-            {!messagesLoading &&
-              !messagesError &&
-              (messages || []).length === 0 && (
-                <div className="conversation-time">（无）</div>
-              )}
+        {ticket.resolution_note && (
+          <div className="detail-section">
+            <h3>人工处理结论</h3>
+            <div>{ticket.resolution_note}</div>
           </div>
+        )}
 
-          <div className="handoff-reply">
-            <label htmlFor="handoff-reply">人工回复</label>
-            <textarea
-              id="handoff-reply"
-              className="input"
-              rows={3}
-              value={reply}
-              maxLength={4000}
-              onChange={(event) => setReply(event.target.value)}
-            />
-            {replyMutation.error && (
-              <div className="error-text" role="alert">
-                回复发送失败，请稍后重试
-              </div>
-            )}
-            {replyNotice && (
-              <div className="success-text" role="status">
-                {replyNotice}
-              </div>
-            )}
-            <button
-              className="btn btn-primary"
-              disabled={!reply.trim() || replyMutation.isPending}
-              onClick={() => replyMutation.mutate(reply.trim())}
-            >
-              <Send size={16} />
-              发送并交回智能体
-            </button>
+        {ticket.rated_at && (
+          <div className="detail-section">
+            <h3>顾客评价</h3>
+            <div>
+              {ticket.rating ? `${"★".repeat(ticket.rating)}${"☆".repeat(5 - ticket.rating)}` : "未打分"}
+              {ticket.rating_comment && (
+                <div className="conversation-time">
+                  {ticket.rating_comment}
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+        )}
 
         <AfterSaleDetail context={afterSaleContext} />
+        <ReturnDetail request={returnRequest} handoffId={ticket.id} />
       </div>
     </div>
   );
@@ -331,4 +441,116 @@ function formatAfterSaleTime(value: string): string {
         hour: "2-digit",
         minute: "2-digit",
       });
+}
+
+function ReturnDetail({
+  request,
+  handoffId,
+}: {
+  request?: HandoffReturnEvidence;
+  handoffId: number;
+}) {
+  const [imageUrl, setImageUrl] = useState("");
+  const [imageError, setImageError] = useState("");
+
+  useEffect(() => {
+    if (!request?.image_id) return;
+    let cancelled = false;
+    let objectUrl = "";
+    setImageUrl("");
+    setImageError("");
+    getHandoffReturnImage(handoffId)
+      .then((blob) => {
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setImageUrl(objectUrl);
+      })
+      .catch(() => {
+        if (!cancelled) setImageError("退换货图片加载失败");
+      });
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [handoffId, request?.image_id]);
+
+  if (!request) return null;
+
+  return (
+    <div className="detail-section">
+      <h3>退换货申请</h3>
+      <div className="return-evidence">
+        {imageUrl && (
+          <img
+            className="return-evidence-image"
+            src={imageUrl}
+            alt="顾客上传的退换货商品照片"
+          />
+        )}
+        {imageError && <div className="conversation-time">{imageError}</div>}
+        <div className="return-evidence-grid">
+          <div>
+            <span>订单号</span>
+            <strong>{request.order_no || "（无）"}</strong>
+          </div>
+          <div>
+            <span>商品</span>
+            <strong>{request.product_name || "（无）"}</strong>
+          </div>
+          <div>
+            <span>SKU / 型号 / 颜色</span>
+            <strong>
+              {request.sku || "—"} / {request.model || "未维护"} /{" "}
+              {request.color || "未维护"}
+            </strong>
+          </div>
+          <div>
+            <span>破损类型 / 程度</span>
+            <strong>
+              {request.damage_type || "—"} / {request.damage_level || "—"}
+            </strong>
+          </div>
+          <div>
+            <span>退换原因</span>
+            <strong>{request.reason || "—"}</strong>
+          </div>
+          <div>
+            <span>识别置信度</span>
+            <strong>
+              {request.confidence != null
+                ? `${Math.round(request.confidence * 100)}%`
+                : "—"}
+            </strong>
+          </div>
+          <div>
+            <span>配件情况</span>
+            <strong>
+              {request.accessories?.length
+                ? request.accessories.join("、")
+                : "未填写"}
+            </strong>
+          </div>
+          <div>
+            <span>联系电话</span>
+            <strong>{request.phone || "—"}</strong>
+          </div>
+        </div>
+        <div>
+          <span className="conversation-time">顾客退货地址</span>
+          <div className="return-evidence-note">
+            {request.return_address || "（无）"}
+          </div>
+        </div>
+        {request.detected_objects && request.detected_objects.length > 0 && (
+          <div className="return-evidence-note">
+            视觉识别：
+            {request.detected_objects
+              .map((item) => item.label_zh || item.label || "")
+              .filter(Boolean)
+              .join("、")}
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }

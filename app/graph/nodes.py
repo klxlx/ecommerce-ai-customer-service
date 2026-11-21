@@ -7,12 +7,15 @@ deterministic templates built on SQL tool results, never from the LLM.
 
 from __future__ import annotations
 
+import asyncio
 import re
 from decimal import Decimal, InvalidOperation
 
 from app.graph.router import (
     extract_order_no,
     is_after_sale_progress_query,
+    is_complaint_or_urgent,
+    is_complaint_policy_query,
     is_explicit_handoff,
     is_greeting,
     is_new_after_sale_request,
@@ -23,11 +26,17 @@ from app.graph.state import (
     MAX_CLARIFICATION_ATTEMPTS,
     AgentState,
 )
-from app.prompts.answer import build_answer_messages
+from app.prompts.answer import KNOWLEDGE_GAP_MARKER, build_answer_messages
 from app.prompts.chitchat import build_chitchat_messages
 from app.schemas.after_sales import AfterSaleFact
 from app.schemas.catalog import AmbiguousProduct, ProductFact
 from app.schemas.orders import OrderFact
+from app.services.tone import (
+    deescalation_reply,
+    ensure_empathy,
+    handoff_reply,
+    is_pure_emotion,
+)
 from app.tools.after_sales import lookup_after_sales
 from app.tools.catalog import get_product_price_stock
 from app.tools.handoff import build_handoff_payload
@@ -40,11 +49,16 @@ from app.tools.weather import (
     is_weather_query,
 )
 
-REFUND_REVIEW_THRESHOLD = Decimal("500.00")
+REFUND_REVIEW_THRESHOLD = Decimal("10.00")
 
 GREETING_REPLY = (
-    "您好！我是您的购物客服助手，可以帮您解答商品咨询、交易规则，"
-    "以及查询订单进度。请问有什么可以帮您？"
+    "你好呀！我是智能客服小天，也是您的购物客服助手，可以帮您解答商品咨询、"
+    "交易规则，以及查询订单进度。请问有什么可以帮您？"
+)
+
+KNOWLEDGE_GAP_REPLY = (
+    "抱歉，我还暂时找不到与这个问题相关的内容，不过我已经列入我的学习内容里了。"
+    "可以换个说法、补充具体的产品名或文档名称再问一次吗？"
 )
 
 CHITCHAT_FRIENDLY = (
@@ -55,6 +69,9 @@ CHITCHAT_FRIENDLY = (
 CHITCHAT_GUIDANCE = (
     "我们还是聊聊您需要的帮助吧～您可以咨询商品、交易规则，"
     "或提供订单号查询进度。如需人工服务，请回复「转人工」。"
+)
+CHITCHAT_BUSINESS_GUARD = (
+    "这个问题需要按业务问题处理，请补充具体订单号或商品名称，我继续帮您查询。"
 )
 WEATHER_CITY_REQUIRED = (
     "请告诉我您想查询的城市，我再帮您看天气。"
@@ -94,10 +111,76 @@ _ORDER_LIST_PATTERN = re.compile(
     r"|订单(?:列表|清单)"
     r"|(?:全部|所有)订单"
 )
+_BUSINESS_GUARD_PATTERN = re.compile(
+    r"(订单|物流|快递|发货|退款|退货|换货|售后|价格|多少钱|库存|有货|"
+    r"商品|型号|sku|保修|发票|优惠|运费|支付|付款)"
+)
 
 
 def _build_handoff(state: AgentState, reason: str) -> dict:
     return build_handoff_payload(state, reason)
+
+
+async def _complete_answer(
+    state: AgentState,
+    messages: list[dict],
+    *,
+    model: str | None = None,
+    max_chars: int | None = None,
+    sentinel: str | None = None,
+    empathy_text: str | None = None,
+) -> str:
+    """Complete an answer, forwarding model tokens when a sink is present.
+
+    When ``sentinel`` is set, the whole generation is buffered before anything
+    reaches the customer. The knowledge prompt appends its gap marker after the
+    generated text, so streaming first and validating later would leak a partial
+    answer that is then replaced by the fixed fallback reply.
+    """
+    chat = state["chat"]
+    sink = state.get("stream")
+    stream_factory = getattr(chat, "stream", None)
+    if sink is not None and callable(stream_factory):
+        stream = stream_factory(messages, model=model)
+        try:
+            if sentinel is not None:
+                parts: list[str] = []
+                async for delta in stream:
+                    if delta:
+                        parts.append(delta)
+                answer = "".join(parts).strip()
+                if answer and sentinel not in answer:
+                    if empathy_text:
+                        answer = ensure_empathy(empathy_text, answer)
+                    for start in range(0, len(answer), 12):
+                        await sink(answer[start : start + 12])
+                        await asyncio.sleep(0.01)
+                return answer
+            else:
+                parts: list[str] = []
+                total = 0
+                async for delta in stream:
+                    if not delta:
+                        continue
+                    if max_chars is not None:
+                        remaining = max_chars - total
+                        if remaining <= 0:
+                            break
+                        delta = delta[:remaining]
+                    parts.append(delta)
+                    total += len(delta)
+                    await sink(delta)
+                answer = "".join(parts).strip()
+                if answer:
+                    return answer
+        finally:
+            close = getattr(stream, "aclose", None)
+            if callable(close):
+                await close()
+
+    if model:
+        return (await chat.complete(messages, model=model)).strip()
+    return (await chat.complete(messages)).strip()
 
 
 def _knowledge_unavailable(
@@ -105,8 +188,14 @@ def _knowledge_unavailable(
     *,
     kb_type: str,
     status: str,
+    parent_ids: list[int] | None = None,
 ) -> dict:
-    knowledge_evidence = {"kb_type": kb_type, "status": status}
+    knowledge_evidence: dict[str, object] = {
+        "kb_type": kb_type,
+        "status": status,
+    }
+    if parent_ids:
+        knowledge_evidence["parent_ids"] = parent_ids
     tool_evidence = {
         **state.get("tool_evidence", {}),
         "knowledge": knowledge_evidence,
@@ -115,11 +204,8 @@ def _knowledge_unavailable(
     handoff_state["sources"] = []
     handoff_state["tool_evidence"] = tool_evidence
     return {
-        "intent": "handoff",
-        "answer": (
-            "抱歉，这个问题暂时无法从知识库确认，"
-            "已为您转接人工客服继续核实，请稍候。"
-        ),
+        "intent": "knowledge_gap",
+        "answer": KNOWLEDGE_GAP_REPLY,
         "sources": [],
         "tool_evidence": tool_evidence,
         "handoff": _build_handoff(handoff_state, "knowledge_unavailable"),
@@ -259,13 +345,26 @@ def _money_text(amount: Decimal) -> str:
 async def route_node(state: AgentState) -> dict:
     user_message = state.get("user_message", "").strip()
     existing_slots = state.get("slots", {})
+    if is_greeting(user_message):
+        return {"intent": "greeting", "slots": _clear_pending(existing_slots)}
+    # "投诉规则/怎么投诉" is a policy question; only an actual complaint or
+    # urgent escalation goes straight to handoff. This guard prevents the
+    # router from confusing the two common phrasings.
+    if not is_complaint_policy_query(user_message) and (
+        is_explicit_handoff(user_message) or is_complaint_or_urgent(user_message)
+    ):
+        return {"intent": "handoff", "slots": _clear_pending(existing_slots)}
+    # Pure hostility or emotional venting must never enter ticket-limit logic.
+    # A mixed message ("气死了，退款怎么还没到") still goes to its business
+    # node, where the answer prompt applies empathy before the factual reply.
+    if is_pure_emotion(user_message):
+        return {
+            "intent": "deescalation",
+            "slots": _clear_pending(existing_slots),
+        }
     pending = _pending_continuation(state)
     if pending is not None:
         return pending
-    if is_greeting(user_message):
-        return {"intent": "greeting", "slots": _clear_pending(existing_slots)}
-    if is_explicit_handoff(user_message):
-        return {"intent": "handoff", "slots": _clear_pending(existing_slots)}
     if is_after_sale_progress_query(user_message) or is_new_after_sale_request(
         user_message
     ):
@@ -297,7 +396,18 @@ async def route_node(state: AgentState) -> dict:
             "intent": "clarification",
             "clarify_question": "抱歉，我没太理解您的意思，请您再描述一下要咨询的商品或订单问题。",
         }
-    slots = _clear_pending({**existing_slots, **decision.slots})
+    slots = _clear_pending(existing_slots)
+    for key, value in decision.slots.items():
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                # The optimized router prompt always emits all five slots with
+                # "" for missing values. Empty strings must not erase context
+                # carried over from earlier turns.
+                if key == "query_scope" and decision.intent == "order":
+                    slots.pop("query_scope", None)
+                continue
+        slots[key] = value
     if decision.intent == "order":
         if _is_order_list_query(user_message):
             slots.pop("order_no", None)
@@ -335,7 +445,6 @@ async def knowledge_node(state: AgentState) -> dict:
             status="not_found",
         )
 
-    chat = state["chat"]
     knowledge_agent = getattr(state.get("agents"), "knowledge", None)
     history = state.get("history", [])
     current = state.get("user_message", "").strip()
@@ -349,11 +458,24 @@ async def knowledge_node(state: AgentState) -> dict:
         system_prompt=getattr(knowledge_agent, "system_prompt", None),
     )
     model = getattr(knowledge_agent, "model", None)
-    if model:
-        answer = await chat.complete(messages, model=model)
-    else:
-        answer = await chat.complete(messages)
+    answer = await _complete_answer(
+        state,
+        messages,
+        model=model,
+        sentinel=KNOWLEDGE_GAP_MARKER,
+        empathy_text=current,
+    )
     answer = answer.strip()
+    if KNOWLEDGE_GAP_MARKER in answer or (
+        "人工客服" in answer
+        and ("暂时无法确认" in answer or "没有相关" in answer)
+    ):
+        return _knowledge_unavailable(
+            state,
+            kb_type=kb_type,
+            status="insufficient_context",
+            parent_ids=result.parent_ids,
+        )
     if not answer:
         return _knowledge_unavailable(
             state,
@@ -363,6 +485,7 @@ async def knowledge_node(state: AgentState) -> dict:
     return {
         "answer": answer,
         "sources": [s.__dict__ for s in result.sources],
+        "grounding_context": result.context,
         "tool_evidence": {"kb_type": kb_type, "parent_ids": result.parent_ids},
     }
 
@@ -383,7 +506,7 @@ async def catalog_node(state: AgentState) -> dict:
     except Exception:
         return {
             "intent": "handoff",
-            "answer": "查询商品信息时遇到问题，已为您转接人工客服。",
+            "answer": KNOWLEDGE_GAP_REPLY,
             "handoff": _build_handoff(state, "工具查询失败"),
         }
 
@@ -427,7 +550,7 @@ async def order_node(state: AgentState) -> dict:
         except Exception:
             return {
                 "intent": "handoff",
-                "answer": "查询订单列表时遇到问题，已为您转接人工客服。",
+                "answer": KNOWLEDGE_GAP_REPLY,
                 "handoff": _build_handoff(state, "工具查询失败"),
             }
         if not facts:
@@ -459,7 +582,7 @@ async def order_node(state: AgentState) -> dict:
     except Exception:
         return {
             "intent": "handoff",
-            "answer": "查询订单时遇到问题，已为您转接人工客服。",
+            "answer": KNOWLEDGE_GAP_REPLY,
             "handoff": _build_handoff(state, "工具查询失败"),
         }
 
@@ -579,11 +702,11 @@ async def after_sale_node(state: AgentState) -> dict:
             order_no=order_no,
             order_status=None,
             service_type=service_type,
-            handoff_required=True,
+            handoff_required=False,
         )
         return {
             "intent": "handoff",
-            "answer": "查询售后信息时遇到问题，已为您转接人工客服。",
+            "answer": KNOWLEDGE_GAP_REPLY,
             "handoff": _build_handoff(state, "工具查询失败"),
             "tool_evidence": evidence,
             "after_sale_context": after_sale_context,
@@ -614,7 +737,7 @@ async def after_sale_node(state: AgentState) -> dict:
         except Exception:
             return {
                 "intent": "handoff",
-                "answer": "查询售后记录时遇到问题，已为您转接人工客服。",
+                "answer": KNOWLEDGE_GAP_REPLY,
                 "handoff": _build_handoff(state, "工具查询失败"),
                 "tool_evidence": evidence,
                 "after_sale_context": _after_sale_context(
@@ -622,7 +745,7 @@ async def after_sale_node(state: AgentState) -> dict:
                     order_no=order_no,
                     order_status=order.status,
                     service_type=service_type,
-                    handoff_required=True,
+                    handoff_required=False,
                 ),
             }
         if facts is None:
@@ -711,30 +834,57 @@ async def after_sale_node(state: AgentState) -> dict:
         or _message_refund_amount(state.get("user_message", ""))
         or order.total_amount
     )
-    exceeded = requested_amount > REFUND_REVIEW_THRESHOLD
+    small_refund = requested_amount < REFUND_REVIEW_THRESHOLD
+    exceeded = requested_amount >= REFUND_REVIEW_THRESHOLD
     evidence["threshold"] = {
         "applied": True,
         "amount": _money_text(requested_amount),
         "limit": _money_text(REFUND_REVIEW_THRESHOLD),
         "exceeded": exceeded,
+        "auto_small_refund": small_refund,
     }
     evidence["after_sale"] = []
+
+    if small_refund:
+        handoff_state = dict(state)
+        handoff_state["tool_evidence"] = evidence
+        handoff = _build_handoff(handoff_state, "small_refund_auto_resolved")
+        handoff["category"] = "refund"
+        handoff["auto_resolve"] = True
+        return {
+            "intent": "after_sale",
+            "answer": (
+                f"您的退款申请金额 ¥{_money_text(requested_amount)} 元，"
+                "已按小额退款流程受理并标记为已解决；"
+                "退款到账请以支付渠道通知为准。"
+            ),
+            "handoff": handoff,
+            "tool_evidence": evidence,
+            "after_sale_context": _after_sale_context(
+                status="no_records",
+                order_no=order_no,
+                order_status=order.status,
+                service_type=service_type,
+            ),
+        }
 
     if exceeded:
         reason = (
             f"新退款金额 {_money_text(requested_amount)} 元"
-            f"超过 {_money_text(REFUND_REVIEW_THRESHOLD)} 元自动受理上限"
+            f"达到 {_money_text(REFUND_REVIEW_THRESHOLD)} 元人工审核线"
         )
         handoff_state = dict(state)
         handoff_state["tool_evidence"] = evidence
+        handoff = _build_handoff(handoff_state, reason)
+        handoff["category"] = "refund"
         return {
             "intent": "handoff",
             "answer": (
-                f"您的退款金额 ¥{_money_text(requested_amount)} 元超过 "
-                f"{_money_text(REFUND_REVIEW_THRESHOLD)} 元，"
+                f"您的退款金额 ¥{_money_text(requested_amount)} 元达到 "
+                f"{_money_text(REFUND_REVIEW_THRESHOLD)} 元人工审核线，"
                 "需要人工客服进一步核实，已为您转接人工客服。"
             ),
-            "handoff": _build_handoff(handoff_state, reason),
+            "handoff": handoff,
             "tool_evidence": evidence,
             "after_sale_context": _after_sale_context(
                 status="no_records",
@@ -761,10 +911,40 @@ async def after_sale_node(state: AgentState) -> dict:
     }
 
 
+def _truncate_at_sentence(text: str, max_chars: int) -> str:
+    """Trim to the last sentence boundary before ``max_chars``."""
+    cleaned = text.strip()
+    if len(cleaned) <= max_chars:
+        return cleaned
+    window = cleaned[:max_chars]
+    best = -1
+    for marker in ("。", "！", "？", "!", "?", "；", ";", "\n"):
+        index = window.rfind(marker)
+        if index > best:
+            best = index
+    if best >= max_chars // 2:
+        return window[: best + 1].rstrip()
+    return window.rstrip()
+
+
+async def deescalation_node(state: AgentState) -> dict:
+    """Answer pure emotion safely, without creating a needless ticket."""
+    return {
+        "intent": "deescalation",
+        "answer": deescalation_reply(state.get("user_message", "")),
+    }
+
+
 async def chitchat_node(state: AgentState) -> dict:
     streak = state.get("chit_chat_streak", 0)
     if streak >= CHIT_CHAT_LIMIT:
         return {"answer": CHITCHAT_GUIDANCE, "chit_chat_streak": streak}
+
+    user_message = state.get("user_message", "").strip()
+    if _BUSINESS_GUARD_PATTERN.search(user_message):
+        # The router should have sent this to a business node. If it did not,
+        # do not let the chitchat model invent an answer for a business query.
+        return {"answer": CHITCHAT_BUSINESS_GUARD, "chit_chat_streak": streak}
 
     chitchat_agent = getattr(state.get("agents"), "chitchat", None)
     # Legacy unit tests invoke this node without the runtime agent registry.
@@ -774,8 +954,6 @@ async def chitchat_node(state: AgentState) -> dict:
             "chit_chat_streak": streak + 1,
         }
 
-    chat = state["chat"]
-    user_message = state.get("user_message", "").strip()
     facts: dict = {}
     tool_evidence: dict = {}
 
@@ -834,11 +1012,8 @@ async def chitchat_node(state: AgentState) -> dict:
         facts,
     )
     model = getattr(chitchat_agent, "model", None)
-    if model:
-        answer = await chat.complete(messages, model=model)
-    else:
-        answer = await chat.complete(messages)
-    answer = answer.strip()[:200]
+    answer = await _complete_answer(state, messages, model=model, max_chars=200)
+    answer = _truncate_at_sentence(answer, 200)
     if not answer:
         answer = "您好，我在呢。请问今天有什么可以帮您？"
 
@@ -859,6 +1034,6 @@ async def clarification_node(state: AgentState) -> dict:
 async def handoff_node(state: AgentState) -> dict:
     return {
         "intent": "handoff",
-        "answer": "已为您转接人工客服，客服会尽快与您联系。",
+        "answer": handoff_reply(state.get("user_message", "")),
         "handoff": _build_handoff(state, "用户请求人工服务"),
     }

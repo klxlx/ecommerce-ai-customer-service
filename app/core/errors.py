@@ -47,6 +47,11 @@ class ProviderRateLimitError(ProviderError):
     retryable = True
 
 
+class ProviderQuotaExceededError(ProviderError):
+    category = "quota_exceeded"
+    retryable = False
+
+
 class ProviderTimeoutError(ProviderError):
     category = "timeout"
     retryable = True
@@ -57,11 +62,31 @@ class ProviderBudgetExceededError(ProviderError):
     retryable = False
 
 
+class ProviderCircuitOpenError(ProviderError):
+    """Short-circuit a provider after repeated final failures."""
+
+    category = "circuit_open"
+    retryable = False
+
+
+def _is_quota_failure(response: httpx.Response) -> bool:
+    """DashScope reports depleted free quota as HTTP 403, not a bad API key."""
+    try:
+        payload = response.json()
+    except ValueError:
+        return "quota" in (response.text or "").lower()
+    code = str(payload.get("code") or "").lower()
+    message = str(payload.get("message") or "").lower()
+    return "quota" in code or "quota" in message or "free tier" in message
+
+
 def map_httpx_error(provider: str, error: httpx.HTTPError) -> ProviderError:
     """Translate an HTTP transport/status failure into a domain error."""
     if isinstance(error, httpx.HTTPStatusError):
         status_code = error.response.status_code
         if status_code in {401, 403}:
+            if status_code == 403 and _is_quota_failure(error.response):
+                return ProviderQuotaExceededError(provider, str(error))
             return ProviderAuthenticationError(provider, str(error))
         if status_code == 429:
             return ProviderRateLimitError(provider, str(error))

@@ -21,6 +21,17 @@ async def get_user_by_id(session: AsyncSession, user_id: int) -> User | None:
     return await session.get(User, user_id)
 
 
+async def get_users_by_ids(
+    session: AsyncSession, user_ids: list[int]
+) -> dict[int, User]:
+    if not user_ids:
+        return {}
+    result = await session.execute(
+        select(User).where(User.id.in_(user_ids))
+    )
+    return {user.id: user for user in result.scalars().all()}
+
+
 async def create_session(
     session: AsyncSession, user_id: int, token_hash: str, expires_at: datetime
 ) -> AuthSession:

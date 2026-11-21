@@ -51,7 +51,7 @@ class KnowledgeUpsert(BaseModel):
     title: str = Field(min_length=1, max_length=300)
     kb_type: KnowledgeType
     applicability: str = Field(default="", max_length=2000)
-    content: str = Field(min_length=1, max_length=50_000)
+    content: str = Field(min_length=1, max_length=500_000)
     effective_date: date | None = None
     source_kind: KnowledgeOrigin | None = None
     original_filename: str | None = Field(default=None, max_length=500)

@@ -66,13 +66,20 @@ async def soft_delete_owned_conversation(
 
 
 async def list_messages(
-    session: AsyncSession, conversation_id: int
+    session: AsyncSession,
+    conversation_id: int,
+    after_id: int | None = None,
+    limit: int | None = None,
 ) -> list[ChatMessage]:
-    result = await session.execute(
-        select(ChatMessage)
-        .where(ChatMessage.conversation_id == conversation_id)
-        .order_by(ChatMessage.id)
+    statement = select(ChatMessage).where(
+        ChatMessage.conversation_id == conversation_id
     )
+    if after_id is not None:
+        statement = statement.where(ChatMessage.id > after_id)
+    statement = statement.order_by(ChatMessage.id)
+    if limit is not None:
+        statement = statement.limit(limit)
+    result = await session.execute(statement)
     return list(result.scalars().all())
 
 
@@ -83,6 +90,7 @@ async def add_message(
     content: str,
     intent: str | None = None,
     sources: list | None = None,
+    actions: list | None = None,
     trace_id: int | None = None,
     after_sale_context: dict | None = None,
 ) -> ChatMessage:
@@ -92,6 +100,7 @@ async def add_message(
         content=content,
         intent=intent,
         sources=sources,
+        actions=actions,
         trace_id=trace_id,
         after_sale_context=after_sale_context,
     )

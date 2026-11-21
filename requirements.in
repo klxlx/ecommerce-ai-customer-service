@@ -16,5 +16,6 @@ pypdf
 python-docx
 pillow
 pymupdf>=1.28.2,<2
+rapidocr-onnxruntime
 pytest
 pytest-asyncio

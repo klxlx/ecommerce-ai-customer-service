@@ -1,7 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../test/render";
-import { MessageBubble } from "./CustomerApp";
+import { MessageBubble } from "../../components/MessageBubble";
 import type { ChatMessage } from "../../api/chat";
 
 function msg(overrides: Partial<ChatMessage>): ChatMessage {
@@ -71,6 +72,22 @@ describe("MessageBubble", () => {
     expect(screen.getByText("这是人工客服回复")).toBeInTheDocument();
   });
 
+  it("renders role avatars for customer, AI and human replies", () => {
+    renderWithProviders(
+      <>
+        <MessageBubble message={msg({ role: "user", content: "你好" })} />
+        <MessageBubble message={msg({ role: "assistant", content: "您好" })} />
+        <MessageBubble message={msg({ role: "admin", content: "人工回复" })} />
+      </>,
+    );
+
+    expect(screen.getByRole("img", { name: "顾客" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "AI 客服" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("img", { name: "人工客服" }),
+    ).toBeInTheDocument();
+  });
+
   it("renders structured after-sale records", () => {
     renderWithProviders(
       <MessageBubble
@@ -106,6 +123,30 @@ describe("MessageBubble", () => {
     expect(panel).toHaveTextContent("¥899.00");
     expect(panel).toHaveTextContent("价保退款");
     expect(panel).toHaveTextContent(/2026/);
+  });
+
+  it("renders a return request action and invokes the callback", async () => {
+    const onReturnRequest = vi.fn();
+    renderWithProviders(
+      <MessageBubble
+        message={msg({
+          content: "可以申请退换货",
+          actions: [
+            {
+              type: "return_request",
+              label: "申请退换货",
+              description: "上传商品照片",
+            },
+          ],
+        })}
+        onReturnRequest={onReturnRequest}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "申请退换货" }),
+    );
+    expect(onReturnRequest).toHaveBeenCalledOnce();
   });
 
   it("renders an explicit empty after-sale state", () => {
@@ -151,7 +192,7 @@ describe("MessageBubble", () => {
     expect(panel).not.toHaveTextContent("已完成");
   });
 
-  it("renders a sanitized query-error state with handoff", () => {
+  it("renders a sanitized query-error state without exposing handoff", () => {
     renderWithProviders(
       <MessageBubble
         message={msg({
@@ -162,7 +203,7 @@ describe("MessageBubble", () => {
             order_status: "已完成",
             service_type: "售后",
             records: [],
-            handoff_required: true,
+            handoff_required: false,
           },
         })}
       />,
@@ -172,7 +213,8 @@ describe("MessageBubble", () => {
       name: "订单 ORD-7201 售后信息",
     });
     expect(panel).toHaveTextContent("售后查询暂时不可用");
-    expect(panel).toHaveTextContent("已转接人工客服核实");
+    expect(panel).toHaveTextContent("请稍后重试，或换一种说法再问一次");
+    expect(panel).not.toHaveTextContent("已转接人工客服核实");
     expect(panel).not.toHaveTextContent("SELECT");
     expect(panel).not.toHaveTextContent("postgresql://");
   });

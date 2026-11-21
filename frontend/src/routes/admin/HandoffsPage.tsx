@@ -58,6 +58,7 @@ export function HandoffsPage() {
               <th>#</th>
               <th>摘要</th>
               <th>状态</th>
+              <th>接待人</th>
               <th>用户</th>
               <th>创建时间</th>
             </tr>
@@ -76,12 +77,40 @@ export function HandoffsPage() {
                     {hasAfterSaleEvidence(t) && (
                       <span className="after-sale-tag">售后</span>
                     )}
+                    {t.kind === "knowledge_gap" && (
+                      <span className="knowledge-gap-tag">知识缺口</span>
+                    )}
+                    {t.kind === "internal" && (
+                      <span className="knowledge-gap-tag">内部异常</span>
+                    )}
+                    {t.category === "return_exchange" && (
+                      <span className="return-exchange-tag">退换货</span>
+                    )}
+                    {t.category === "refund" && (
+                      <span className="return-exchange-tag">退款</span>
+                    )}
+                    {(t.kind === "internal" || t.kind === "knowledge_gap") &&
+                      t.business_status && (
+                        <span className="knowledge-gap-tag">
+                          {t.business_status}
+                        </span>
+                      )}
+                    {t.rated_at && (
+                      <span className="after-sale-tag">已评价</span>
+                    )}
                   </div>
                 </td>
                 <td data-label="状态">
                   <span className={`pill pill-${t.status}`}>
-                    {STATUS_LABEL[t.status] || t.status}
+                    {t.kind === "internal" && t.status === "resolved"
+                      ? "已处理"
+                      : STATUS_LABEL[t.status] || t.status}
                   </span>
+                </td>
+                <td data-label="接待人">
+                  {t.kind === "internal" || t.kind === "knowledge_gap"
+                    ? "—"
+                    : t.assignee_name || "待接入"}
                 </td>
                 <td data-label="用户">#{t.user_id}</td>
                 <td data-label="创建时间">

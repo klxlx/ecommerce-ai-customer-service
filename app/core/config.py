@@ -61,12 +61,79 @@ class Settings(BaseSettings):
     # DashScope native embedding / rerank
     dashscope_api_key: str = Field(default="", validation_alias="DASHSCOPE_API_KEY")
     embedding_model: str = Field(
-        default="text-embedding-v3", validation_alias="EMBEDDING_MODEL"
+        default="text-embedding-v4", validation_alias="EMBEDDING_MODEL"
     )
     embedding_dimension: int = Field(
         default=1024, validation_alias="EMBEDDING_DIMENSION"
     )
     rerank_model: str = Field(default="text-rerank-v1", validation_alias="RERANK_MODEL")
+
+    # Handoff ticket policy
+    handoff_dedupe_similarity: float = Field(
+        default=0.93, validation_alias="HANDOFF_DEDUPE_SIMILARITY"
+    )
+    handoff_max_unresolved: int = Field(
+        default=2, validation_alias="HANDOFF_MAX_UNRESOLVED"
+    )
+
+    # SSE and gateway keep-alive
+    sse_heartbeat_seconds: float = Field(
+        default=15.0, validation_alias="SSE_HEARTBEAT_SECONDS"
+    )
+
+    # Asynchronous answer sentinel. An empty model falls back to ROUTER_MODEL,
+    # so the guard uses the same model tier and API key as intent routing.
+    sentinel_enabled: bool = Field(
+        default=True, validation_alias="SENTINEL_ENABLED"
+    )
+    sentinel_model: str = Field(default="", validation_alias="SENTINEL_MODEL")
+    sentinel_timeout_seconds: float = Field(
+        default=8.0, validation_alias="SENTINEL_TIMEOUT_SECONDS"
+    )
+    sentinel_max_context_chars: int = Field(
+        default=6000, validation_alias="SENTINEL_MAX_CONTEXT_CHARS"
+    )
+
+    # Photo return intake. ``vision_provider`` is intentionally pluggable.
+    vision_provider: str = Field(
+        default="yolo", validation_alias="VISION_PROVIDER"
+    )
+    yolo_model_path: str = Field(
+        default="models/yolov8n.onnx", validation_alias="YOLO_MODEL_PATH"
+    )
+    yolo_confidence_threshold: float = Field(
+        default=0.35, validation_alias="YOLO_CONFIDENCE_THRESHOLD"
+    )
+    yolo_iou_threshold: float = Field(
+        default=0.45, validation_alias="YOLO_IOU_THRESHOLD"
+    )
+    yolo_input_size: int = Field(
+        default=640, validation_alias="YOLO_INPUT_SIZE"
+    )
+    return_image_dir: str = Field(
+        default="data/return_images", validation_alias="RETURN_IMAGE_DIR"
+    )
+    return_image_max_mb: int = Field(
+        default=10, validation_alias="RETURN_IMAGE_MAX_MB"
+    )
+
+    # Semantic FAQ cache (Postgres + pgvector; seed data only).
+    semantic_cache_enabled: bool = Field(
+        default=True, validation_alias="SEMANTIC_CACHE_ENABLED"
+    )
+    semantic_cache_similarity: float = Field(
+        default=0.95, validation_alias="SEMANTIC_CACHE_SIMILARITY"
+    )
+    semantic_cache_max_results: int = Field(
+        default=3, validation_alias="SEMANTIC_CACHE_MAX_RESULTS"
+    )
+    semantic_cache_embedding_model: str = Field(
+        default="", validation_alias="SEMANTIC_CACHE_EMBEDDING_MODEL"
+    )
+
+    @property
+    def semantic_cache_embedding_model_name(self) -> str:
+        return self.semantic_cache_embedding_model or self.embedding_model
 
     # Auth
     session_ttl_hours: int = Field(default=24, validation_alias="SESSION_TTL_HOURS")
@@ -133,6 +200,11 @@ class Settings(BaseSettings):
     def embedding_configured(self) -> bool:
         """Whether an embedding API key has been supplied."""
         return bool(self.dashscope_api_key)
+
+    @property
+    def sentinel_model_name(self) -> str:
+        """The sentinel uses the router tier unless explicitly overridden."""
+        return self.sentinel_model or self.router_model
 
 
 @lru_cache

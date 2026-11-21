@@ -22,3 +22,5 @@ class Container:
     agents: AgentRegistry | None = None
     weather: Any = None
     local_time: Any = get_local_time
+    vision: Any = None
+    cache_embeddings: Any = None

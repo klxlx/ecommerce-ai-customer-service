@@ -21,11 +21,15 @@ async def test_demo_after_sale_seed_is_idempotent(db_session):
 
     users = await _seed_users(db_session)
     products = await _seed_products(db_session)
-    orders = await _seed_orders(db_session, users["customer"], products)
+    orders = await _seed_orders(db_session, users, products)
 
     assert set(orders) == {
         "ORD-20261117-0001",
         "ORD-20261110-0015",
+        "ORD-20261118-0002",
+        "ORD-20261112-0021",
+        "ORD-20261119-0003",
+        "ORD-20261105-0033",
     }
 
     await _seed_after_sales(db_session, orders)
@@ -45,4 +49,4 @@ async def test_demo_after_sale_seed_is_idempotent(db_session):
     assert rows[0].reason == "商品破损"
 
     total = await db_session.scalar(select(func.count()).select_from(AfterSale))
-    assert total == 1
+    assert total == 2

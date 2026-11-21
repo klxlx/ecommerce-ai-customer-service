@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any, Literal, TypedDict
 
 INTENTS = Literal[
@@ -13,8 +13,10 @@ INTENTS = Literal[
     "order",
     "after_sale",
     "chit_chat",
+    "deescalation",
     "clarification",
     "handoff",
+    "knowledge_gap",
 ]
 
 CHIT_CHAT_LIMIT = 2
@@ -29,6 +31,7 @@ class AgentState(TypedDict, total=False):
     slots: dict[str, Any]
     sources: list[dict[str, Any]]
     tool_evidence: dict[str, Any]
+    grounding_context: str
     after_sale_context: dict[str, Any] | None
     chit_chat_streak: int
     clarification_attempts: int
@@ -42,3 +45,4 @@ class AgentState(TypedDict, total=False):
     agents: Any
     weather: Any
     local_time: Callable[[], dict[str, str]]
+    stream: Callable[[str], Awaitable[None]] | None

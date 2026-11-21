@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import {
   useMutation,
   useQuery,
@@ -20,15 +20,24 @@ import {
   X,
 } from "lucide-react";
 import { useAuth } from "../../auth/AuthContext";
+import { ChatAvatar } from "../../components/ChatAvatar";
+import { MessageBubble } from "../../components/MessageBubble";
+import { ReturnRequestModal } from "./ReturnRequestModal";
+import {
+  formatTimeDivider,
+  shouldShowTimeDivider,
+} from "../../components/chatTime";
 import {
   createConversation,
   deleteConversation,
   listConversations,
   listMessages,
-  sendMessage,
-  type AfterSaleContext,
+  sendMessageStream,
   type ChatMessage,
 } from "../../api/chat";
+
+const WELCOME_MESSAGE =
+  "你好呀！我是你的智能客服小天，请问有什么能够帮到你的？";
 
 const SUGGESTIONS = [
   "有哪些蓝牙耳机？",
@@ -294,29 +303,130 @@ function ChatPanel({
   onOpenRail: () => void;
 }) {
   const [draft, setDraft] = useState("");
+  const [streamingMessages, setStreamingMessages] = useState<
+    ChatMessage[] | null
+  >(null);
+  const [streaming, setStreaming] = useState(false);
+  const [streamError, setStreamError] = useState("");
+  const [returnOpen, setReturnOpen] = useState(false);
+  const streamAbort = useRef<AbortController | null>(null);
   const queryClient = useQueryClient();
 
   const { data: messages, isLoading } = useQuery({
     queryKey: ["messages", conversationId],
     queryFn: () => listMessages(conversationId!),
     enabled: conversationId != null,
-    refetchInterval: conversationId == null ? false : 3000,
+    refetchInterval: conversationId == null || streaming ? false : 3000,
   });
 
-  const sendMutation = useMutation({
-    mutationFn: (content: string) => sendMessage(conversationId!, content),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["messages", conversationId] });
-      queryClient.invalidateQueries({ queryKey: ["conversations"] });
-    },
-  });
+  useEffect(() => {
+    return () => {
+      streamAbort.current?.abort();
+    };
+  }, [conversationId]);
 
-  function handleSend() {
+  useEffect(() => {
+    setStreamingMessages(null);
+    setStreaming(false);
+    setStreamError("");
+  }, [conversationId]);
+
+  async function handleSend() {
     const content = draft.trim();
-    if (!content || conversationId == null) return;
+    if (!content || conversationId == null || streaming) return;
+
     setDraft("");
-    sendMutation.mutate(content);
+    setStreamError("");
+    const now = new Date().toISOString();
+    const pendingUser: ChatMessage = {
+      id: -1,
+      role: "user",
+      content,
+      intent: null,
+      sources: null,
+      created_at: now,
+    };
+    const pendingAssistant: ChatMessage = {
+      id: -2,
+      role: "assistant",
+      content: "",
+      intent: null,
+      sources: null,
+      created_at: now,
+    };
+    setStreamingMessages([pendingUser, pendingAssistant]);
+    setStreaming(true);
+
+    const controller = new AbortController();
+    streamAbort.current = controller;
+
+    try {
+      await sendMessageStream(
+        conversationId,
+        content,
+        (text) => {
+          setStreamingMessages((current) =>
+            current
+              ? current.map((message) =>
+                  message.id === -2
+                    ? { ...message, content: message.content + text }
+                    : message,
+                )
+              : current,
+          );
+        },
+        controller.signal,
+        (text) => {
+          setStreamingMessages((current) =>
+            current
+              ? current.map((message) =>
+                  message.id === -2 ? { ...message, content: text } : message,
+                )
+              : current,
+          );
+        },
+      );
+
+      const fresh = await listMessages(conversationId);
+      queryClient.setQueryData(["messages", conversationId], fresh);
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+      setStreamingMessages(null);
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        setStreamError(
+          error instanceof Error ? error.message : "发送失败，请稍后重试",
+        );
+        try {
+          const fresh = await listMessages(conversationId);
+          queryClient.setQueryData(["messages", conversationId], fresh);
+        } catch {
+          // Keep the optimistic turn visible when the refetch also fails.
+        }
+        setStreamingMessages(null);
+      }
+    } finally {
+      if (streamAbort.current === controller) {
+        streamAbort.current = null;
+      }
+      setStreaming(false);
+    }
   }
+
+  const actualMessages = messages ?? [];
+  const greeting: ChatMessage = {
+    id: -100,
+    role: "assistant",
+    content: WELCOME_MESSAGE,
+    intent: null,
+    sources: null,
+    created_at: new Date().toISOString(),
+  };
+  const visibleMessages: ChatMessage[] =
+    !isLoading &&
+    actualMessages.length === 0 &&
+    streamingMessages === null
+      ? [greeting]
+      : [...actualMessages, ...(streamingMessages ?? [])];
 
   return (
     <section className="chat-panel">
@@ -357,22 +467,46 @@ function ChatPanel({
                 <div className="spinner" />
               </div>
             )}
-            {!isLoading && messages?.length === 0 && (
-              <div className="state-box">
-                你好，我是智能客服，有什么可以帮您？
-              </div>
-            )}
-            {messages?.map((m) => (
-              <MessageBubble key={m.id} message={m} />
+            {visibleMessages.map((m, index) => (
+              <Fragment key={m.id}>
+                {shouldShowTimeDivider(visibleMessages, index) && (
+                  <div className="chat-time-divider">
+                    {formatTimeDivider(m.created_at)}
+                  </div>
+                )}
+                {m.id === -2 ? (
+                  <div className="message assistant">
+                    <ChatAvatar role="assistant" />
+                    <div
+                      className={`message-bubble${m.content ? "" : " message-bubble-pending"}`}
+                    >
+                      {m.content ? (
+                        m.content
+                      ) : (
+                        <span
+                          className="stream-spinner"
+                          role="status"
+                          aria-label="AI 客服正在回复"
+                        />
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <MessageBubble
+                    message={m}
+                    conversationId={conversationId ?? undefined}
+                    onReturnRequest={() => setReturnOpen(true)}
+                  />
+                )}
+              </Fragment>
             ))}
-            {sendMutation.isPending && (
-              <div className="message assistant">
-                <div className="message-bubble">
-                  <div className="spinner" />
-                </div>
-              </div>
-            )}
           </div>
+
+          {streamError && (
+            <div className="error-text chat-stream-error" role="alert">
+              {streamError}
+            </div>
+          )}
 
           <footer className="chat-composer">
             <textarea
@@ -393,122 +527,27 @@ function ChatPanel({
               className="btn btn-primary send-btn"
               aria-label="发送"
               onClick={handleSend}
-              disabled={!draft.trim() || sendMutation.isPending}
+              disabled={!draft.trim() || streaming}
             >
               <Send size={16} />
             </button>
           </footer>
+          {returnOpen && conversationId != null && (
+            <ReturnRequestModal
+              conversationId={conversationId}
+              onClose={() => setReturnOpen(false)}
+              onSubmitted={() => {
+                setReturnOpen(false);
+                queryClient.invalidateQueries({
+                  queryKey: ["messages", conversationId],
+                });
+                queryClient.invalidateQueries({ queryKey: ["conversations"] });
+              }}
+            />
+          )}
         </>
       )}
     </section>
   );
 }
 
-export function MessageBubble({ message }: { message: ChatMessage }) {
-  const isUser = message.role === "user";
-  return (
-    <div className={`message ${message.role}`}>
-      {message.role === "admin" && (
-        <div className="message-meta">人工客服</div>
-      )}
-      <div className="message-bubble">{message.content}</div>
-      {!isUser && message.after_sale && (
-        <AfterSalePanel afterSale={message.after_sale} />
-      )}
-      {!isUser && message.sources && message.sources.length > 0 && (
-        <div className="sources" data-testid="message-sources">
-          {message.sources.map((s, i) => (
-            <span key={i} className="source-chip">
-              {s.title}
-            </span>
-          ))}
-        </div>
-      )}
-      {!isUser && message.intent === "handoff" && (
-        <div className="handoff-notice">已转接人工客服</div>
-      )}
-    </div>
-  );
-}
-
-function AfterSalePanel({ afterSale }: { afterSale: AfterSaleContext }) {
-  return (
-    <section
-      className="after-sale-panel"
-      role="region"
-      aria-label={`订单 ${afterSale.order_no} 售后信息`}
-    >
-      <div className="after-sale-heading">
-        <strong>订单 {afterSale.order_no}</strong>
-        <span>{afterSale.service_type}</span>
-      </div>
-
-      {afterSale.status === "has_records" && (
-        <>
-          {afterSale.order_status && (
-            <div className="after-sale-order-state">
-              订单状态：{afterSale.order_status}
-            </div>
-          )}
-          <div className="after-sale-records">
-            {afterSale.records.map((record) => (
-              <article className="after-sale-record" key={record.id}>
-                <div className="after-sale-record-top">
-                  <strong>{record.service_type}</strong>
-                  <span className="after-sale-status">{record.status}</span>
-                </div>
-                {record.refund_amount && (
-                  <div className="after-sale-amount">
-                    退款金额：¥{record.refund_amount}
-                  </div>
-                )}
-                <div>原因：{record.reason}</div>
-                <div className="after-sale-time">
-                  申请时间：{formatAfterSaleTime(record.created_at)}
-                </div>
-              </article>
-            ))}
-          </div>
-        </>
-      )}
-
-      {afterSale.status === "no_records" && (
-        <div className="after-sale-empty">
-          {afterSale.order_status && (
-            <div>订单状态：{afterSale.order_status}</div>
-          )}
-          <div>暂无售后记录</div>
-          <div className="after-sale-guidance">
-            可核对订单详情，或转人工客服进一步核实。
-          </div>
-        </div>
-      )}
-
-      {afterSale.status === "not_available" && (
-        <div className="after-sale-empty">
-          未查询到可展示的订单或售后信息
-        </div>
-      )}
-
-      {afterSale.status === "query_error" && (
-        <div className="after-sale-empty">
-          <div>售后查询暂时不可用</div>
-          <div className="after-sale-guidance">已转接人工客服核实</div>
-        </div>
-      )}
-    </section>
-  );
-}
-
-function formatAfterSaleTime(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime())
-    ? value
-    : date.toLocaleString("zh-CN", {
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-}

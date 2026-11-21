@@ -22,6 +22,8 @@ def _to_order_fact(
         items=[
             OrderItemFact(
                 product_name=item.product_name,
+                model=item.model,
+                color=item.color,
                 quantity=item.quantity,
                 unit_price=item.unit_price,
             )

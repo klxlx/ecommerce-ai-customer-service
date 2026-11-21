@@ -49,6 +49,8 @@ const EMPTY_FORM: FormState = {
   content: "",
 };
 
+const MAX_KNOWLEDGE_FILE_BYTES = 30 * 1024 * 1024;
+
 const STATUS_LABEL: Record<string, string> = {
   published: "已发布",
   draft: "草稿",
@@ -221,6 +223,14 @@ export function KnowledgePage() {
   }
 
   function selectFile(file: File | null) {
+    if (file && file.size > MAX_KNOWLEDGE_FILE_BYTES) {
+      setSelectedFile(null);
+      setImportMeta(null);
+      setDetectedMetadata(null);
+      setResult(null);
+      setPreviewError("文件不能超过 30 MB");
+      return;
+    }
     setSelectedFile(file);
     setImportMeta(null);
     setDetectedMetadata(null);
@@ -410,7 +420,7 @@ export function KnowledgePage() {
               <Upload size={16} />
               <div>
                 <label htmlFor="knowledge-file">导入文件</label>
-                <span>支持 TXT、Markdown、DOCX、PDF 和图片，最大 20 MB</span>
+                <span>支持 TXT、Markdown、DOCX、PDF 和图片，最大 30 MB</span>
               </div>
             </div>
             <div className="knowledge-file-row">

@@ -193,13 +193,13 @@ async def test_knowledge_retrieval_failure_creates_sanitized_handoff(monkeypatch
     monkeypatch.setattr(nodes, "retrieve_knowledge", fake_retrieve)
     result = await nodes.knowledge_node(_state(intent="product_knowledge"))
 
-    assert result["intent"] == "handoff"
+    assert result["intent"] == "knowledge_gap"
     assert result["handoff"]["reason"] == "knowledge_unavailable"
     assert result["tool_evidence"]["knowledge"] == {
         "kb_type": "product",
         "status": "retrieval_failed",
     }
-    assert "人工" in result["answer"]
+    assert "学习内容" in result["answer"]
     assert "embedding down" not in result["answer"]
     assert "embedding down" not in str(result["handoff"])
 
@@ -212,10 +212,10 @@ async def test_knowledge_empty_result_creates_handoff(monkeypatch):
     monkeypatch.setattr(nodes, "retrieve_knowledge", fake_retrieve)
     result = await nodes.knowledge_node(_state(intent="product_knowledge"))
 
-    assert result["intent"] == "handoff"
+    assert result["intent"] == "knowledge_gap"
     assert result["handoff"]["reason"] == "knowledge_unavailable"
     assert result["tool_evidence"]["knowledge"]["status"] == "not_found"
-    assert "人工" in result["answer"]
+    assert "学习内容" in result["answer"]
 
 
 @pytest.mark.anyio
@@ -234,11 +234,11 @@ async def test_knowledge_empty_answer_creates_handoff(monkeypatch):
         )
     )
 
-    assert result["intent"] == "handoff"
+    assert result["intent"] == "knowledge_gap"
     assert result["handoff"]["reason"] == "knowledge_unavailable"
     assert result["tool_evidence"]["knowledge"]["status"] == "empty_answer"
     assert result["sources"] == []
-    assert "人工" in result["answer"]
+    assert "学习内容" in result["answer"]
 
 
 @pytest.mark.anyio
@@ -316,6 +316,77 @@ async def test_chitchat_limit_then_guidance():
     third = await nodes.chitchat_node(_state(chit_chat_streak=2))
     assert third["chit_chat_streak"] == CHIT_CHAT_LIMIT  # capped, not incremented
     assert "转人工" in third["answer"] or "业务" in third["answer"]
+
+
+@pytest.mark.anyio
+async def test_chitchat_business_guard_does_not_answer_business_query():
+    result = await nodes.chitchat_node(
+        _state(user_message="订单一直没发货", chit_chat_streak=0)
+    )
+    assert "业务问题" in result["answer"]
+    assert "订单号" in result["answer"]
+    assert result["chit_chat_streak"] == 0
+
+
+@pytest.mark.anyio
+async def test_complaint_expression_goes_to_handoff_without_router_call():
+    chat = FakeChat("")
+    result = await nodes.route_node(
+        _state(user_message="我要投诉你们", chat=chat)
+    )
+    assert result["intent"] == "handoff"
+    assert chat.calls == []
+
+
+@pytest.mark.anyio
+async def test_pure_threat_goes_to_deescalation_without_router_call():
+    chat = FakeChat("")
+    result = await nodes.route_node(
+        _state(user_message="我想打人", chat=chat)
+    )
+    assert result["intent"] == "deescalation"
+    assert chat.calls == []
+
+
+@pytest.mark.anyio
+async def test_threat_with_business_words_still_goes_to_deescalation():
+    chat = FakeChat("")
+    result = await nodes.route_node(
+        _state(user_message="再不退款我就打人", chat=chat)
+    )
+    assert result["intent"] == "deescalation"
+    assert chat.calls == []
+
+
+@pytest.mark.anyio
+async def test_deescalation_node_soothes_before_safety_boundary():
+    result = await nodes.deescalation_node(
+        _state(user_message="我想打人")
+    )
+    assert "抱歉" in result["answer"]
+    assert "安全" in result["answer"]
+    assert "服务需求太多" not in result["answer"]
+
+
+@pytest.mark.anyio
+async def test_handoff_node_adds_empathy_for_complaint():
+    result = await nodes.handoff_node(
+        _state(user_message="我要投诉")
+    )
+    assert "抱歉" in result["answer"]
+    assert "转接人工客服" in result["answer"]
+
+
+@pytest.mark.anyio
+async def test_complaint_rule_query_stays_business_knowledge():
+    chat = FakeChat(
+        '{"intent":"policy_knowledge","slots":{}}'
+    )
+    result = await nodes.route_node(
+        _state(user_message="投诉规则是什么", chat=chat)
+    )
+    assert result["intent"] == "policy_knowledge"
+    assert len(chat.calls) == 1
 
 
 @pytest.mark.anyio
@@ -466,7 +537,7 @@ async def test_new_return_request_does_not_promise_direct_return_in_restricted_s
 
 
 @pytest.mark.anyio
-async def test_new_refund_at_threshold_does_not_handoff(monkeypatch):
+async def test_new_refund_below_threshold_auto_resolves(monkeypatch):
     async def fake_order(session, user_id, order_no):
         return _order_fact(order_no=order_no, total_amount="620.00")
 
@@ -474,22 +545,50 @@ async def test_new_refund_at_threshold_does_not_handoff(monkeypatch):
 
     result = await nodes.after_sale_node(
         _state(
-            user_message="我要退款 500 元",
+            user_message="我要退款 9.99 元",
             slots={
                 "order_no": "ORD-AFTER-1",
                 "after_sale_action": "new_request",
-                "refund_amount": "500.00",
+                "refund_amount": "9.99",
             },
         )
     )
 
-    assert "handoff" not in result
+    assert result["intent"] == "after_sale"
+    assert result["handoff"]["auto_resolve"] is True
+    assert result["handoff"]["category"] == "refund"
     assert result["tool_evidence"]["threshold"] == {
         "applied": True,
-        "amount": "500.00",
-        "limit": "500.00",
+        "amount": "9.99",
+        "limit": "10.00",
         "exceeded": False,
+        "auto_small_refund": True,
     }
+
+
+@pytest.mark.anyio
+async def test_new_refund_at_threshold_hands_off(monkeypatch):
+    async def fake_order(session, user_id, order_no):
+        return _order_fact(order_no=order_no, total_amount="620.00")
+
+    monkeypatch.setattr(nodes, "get_order_and_logistics", fake_order)
+
+    result = await nodes.after_sale_node(
+        _state(
+            user_message="我要退款 10 元",
+            slots={
+                "order_no": "ORD-AFTER-1",
+                "after_sale_action": "new_request",
+                "refund_amount": "10.00",
+            },
+        )
+    )
+
+    assert result["intent"] == "handoff"
+    assert "10.00" in result["handoff"]["reason"]
+    assert result["tool_evidence"]["threshold"]["amount"] == "10.00"
+    assert result["tool_evidence"]["threshold"]["exceeded"] is True
+    assert result["tool_evidence"]["threshold"]["auto_small_refund"] is False
 
 
 @pytest.mark.anyio
@@ -501,18 +600,18 @@ async def test_new_refund_above_threshold_hands_off(monkeypatch):
 
     result = await nodes.after_sale_node(
         _state(
-            user_message="我要退款 500.01 元",
+            user_message="我要退款 10.01 元",
             slots={
                 "order_no": "ORD-AFTER-1",
                 "after_sale_action": "new_request",
-                "refund_amount": "500.01",
+                "refund_amount": "10.01",
             },
         )
     )
 
     assert result["intent"] == "handoff"
-    assert "500" in result["handoff"]["reason"]
-    assert result["tool_evidence"]["threshold"]["amount"] == "500.01"
+    assert "10" in result["handoff"]["reason"]
+    assert result["tool_evidence"]["threshold"]["amount"] == "10.01"
     assert result["tool_evidence"]["threshold"]["exceeded"] is True
 
 
@@ -533,7 +632,8 @@ async def test_new_refund_without_amount_uses_order_paid_amount(monkeypatch):
         )
     )
 
-    assert "handoff" not in result
+    assert result["intent"] == "handoff"
+    assert result["handoff"]["category"] == "refund"
     assert result["tool_evidence"]["threshold"]["amount"] == "499.00"
     assert result["tool_evidence"]["threshold"]["applied"] is True
 
@@ -599,6 +699,6 @@ async def test_after_sale_tool_failure_is_sanitized_and_hands_off(
 
     assert result["intent"] == "handoff"
     assert "db down" not in result["answer"]
-    assert "转接人工" in result["answer"]
+    assert result["answer"] == nodes.KNOWLEDGE_GAP_REPLY
     assert result["after_sale_context"]["status"] == "query_error"
-    assert result["after_sale_context"]["handoff_required"] is True
+    assert result["after_sale_context"]["handoff_required"] is False
