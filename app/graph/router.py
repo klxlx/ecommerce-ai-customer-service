@@ -17,6 +17,7 @@ VALID_INTENTS = {
     "order",
     "after_sale",
     "chit_chat",
+    "deescalation",
     "handoff",
 }
 

@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_container, get_current_user, rate_limit_chat
 from app.db.models import User
 from app.db.repositories import chat as chat_repo
+from app.db.repositories import handoff as handoff_repo
 from app.db.session import get_session
 from app.schemas.chat import (
     ChatMessageOut,
@@ -22,7 +23,9 @@ from app.schemas.chat import (
     ConversationOut,
     MessageCreate,
 )
+from app.schemas.handoff import HandoffFeedbackCreate, HandoffFeedbackOut
 from app.services import chat as chat_service
+from app.services import ticket_feedback
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -205,6 +208,48 @@ def _sse(event: str, payload: dict) -> str:
 def _answer_chunks(text: str, size: int = 3):
     for index in range(0, len(text), size):
         yield text[index : index + size]
+
+
+@router.post(
+    "/conversations/{conversation_id}/tickets/{ticket_id}/feedback",
+    response_model=HandoffFeedbackOut,
+)
+async def submit_ticket_feedback(
+    conversation_id: int,
+    ticket_id: int,
+    payload: HandoffFeedbackCreate,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    conversation = await chat_repo.get_conversation_owned(
+        session, conversation_id, user.id
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    ticket = await handoff_repo.get_handoff(session, ticket_id)
+    if ticket is None or ticket.conversation_id != conversation_id:
+        raise HTTPException(status_code=404, detail="工单不存在")
+    try:
+        await ticket_feedback.save_feedback(
+            session,
+            ticket=ticket,
+            customer=user,
+            rating=payload.rating,
+            comment=payload.comment,
+        )
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    await session.commit()
+    return HandoffFeedbackOut(
+        ticket_id=ticket.id,
+        can_rate=ticket_feedback.can_rate(ticket),
+        rated=ticket.rating is not None or ticket.rated_at is not None,
+        rating=ticket.rating,
+        comment=ticket.rating_comment,
+        rated_at=ticket.rated_at,
+    )
 
 
 @router.post("/conversations/{conversation_id}/messages", response_model=ChatResponse)

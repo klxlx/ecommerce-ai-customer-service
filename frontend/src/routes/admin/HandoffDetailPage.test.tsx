@@ -125,4 +125,124 @@ describe("HandoffDetailPage after-sale context", () => {
       screen.queryByRole("button", { name: "发送回复" }),
     ).not.toBeInTheDocument();
   });
+
+  it("renders ticket slots with Chinese labels and expands handoff objects", async () => {
+    mockedGetHandoff.mockResolvedValue(
+      ticket({
+        slots: {
+          order_no: "ORD-20261117-0001",
+          product: "声动 Pro 无线蓝牙耳机",
+          after_sale_action: "new_request",
+          last_handoff: {
+            ticket_id: 10,
+            note: "已电话沟通并完成处理。",
+            resolved_at: "2026-11-21T10:33:13Z",
+          },
+        },
+        evidence: { sources: [], tool: {} },
+      }),
+    );
+
+    renderWithProviders(
+      <Routes>
+        <Route path="/admin/handoffs/:id" element={<HandoffDetailPage />} />
+      </Routes>,
+      { initialEntries: ["/admin/handoffs/7"] },
+    );
+
+    expect(await screen.findByText("订单号")).toBeInTheDocument();
+    expect(screen.getByText("售后动作")).toBeInTheDocument();
+    expect(screen.getByText("新建售后申请")).toBeInTheDocument();
+    expect(screen.getByText("最近一次人工交接")).toBeInTheDocument();
+    expect(screen.getByText(/工单 #10/)).toHaveTextContent(
+      "已电话沟通并完成处理。",
+    );
+    expect(screen.queryByText("[object Object]")).not.toBeInTheDocument();
+  });
+
+  it("marks a knowledge gap as resolved", async () => {
+    mockedGetHandoff.mockResolvedValue(
+      ticket({
+        kind: "knowledge_gap",
+        status: "open",
+        business_status: "待补全",
+      }),
+    );
+    mockedUpdateHandoffStatus.mockResolvedValue(
+      ticket({
+        kind: "knowledge_gap",
+        status: "resolved",
+        business_status: "知识已补全",
+      }),
+    );
+
+    renderWithProviders(
+      <Routes>
+        <Route path="/admin/handoffs/:id" element={<HandoffDetailPage />} />
+      </Routes>,
+      { initialEntries: ["/admin/handoffs/7"] },
+    );
+
+    const resolveButton = await screen.findByRole("button", {
+      name: "已解决",
+    });
+    await userEvent.click(resolveButton);
+    expect(mockedUpdateHandoffStatus).toHaveBeenCalledWith(7, "resolved");
+  });
+
+  it("uses the handled label for an internal tool failure", async () => {
+    mockedGetHandoff.mockResolvedValue(
+      ticket({
+        kind: "internal",
+        status: "open",
+        business_status: "工具待修复",
+        evidence: { sources: [], tool: {}, internal_kind: "tool_failure" },
+      }),
+    );
+    mockedUpdateHandoffStatus.mockResolvedValue(
+      ticket({
+        kind: "internal",
+        status: "resolved",
+        business_status: "工具已修复",
+        evidence: { sources: [], tool: {}, internal_kind: "tool_failure" },
+      }),
+    );
+
+    renderWithProviders(
+      <Routes>
+        <Route path="/admin/handoffs/:id" element={<HandoffDetailPage />} />
+      </Routes>,
+      { initialEntries: ["/admin/handoffs/7"] },
+    );
+
+    const resolveButton = await screen.findByRole("button", {
+      name: "已处理",
+    });
+    await userEvent.click(resolveButton);
+    expect(mockedUpdateHandoffStatus).toHaveBeenCalledWith(7, "resolved");
+  });
+
+  it("shows the assignee and lets a stale in-progress ticket be re-claimed", async () => {
+    mockedGetHandoff.mockResolvedValue(
+      ticket({
+        kind: "human",
+        status: "in_progress",
+        assignee_id: null,
+        assignee_name: "",
+        business_status: "处理中",
+      }),
+    );
+
+    renderWithProviders(
+      <Routes>
+        <Route path="/admin/handoffs/:id" element={<HandoffDetailPage />} />
+      </Routes>,
+      { initialEntries: ["/admin/handoffs/7"] },
+    );
+
+    expect(await screen.findByText(/接待人：待接入/)).toBeInTheDocument();
+    const takeOver = await screen.findByRole("button", { name: "重新接入" });
+    await userEvent.click(takeOver);
+    expect(mockedUpdateHandoffStatus).toHaveBeenCalledWith(7, "in_progress");
+  });
 });

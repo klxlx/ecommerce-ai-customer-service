@@ -457,11 +457,11 @@ class HandoffTicket(Base, TimestampMixin):
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     status: Mapped[str] = mapped_column(String(16), default="open", nullable=False)
-    # human | knowledge_gap：知识缺口工单不进入客服回复，也不阻断智能体。
+    # human | knowledge_gap | internal：后两类仅在后台可见，不向顾客展示状态。
     kind: Mapped[str] = mapped_column(
         String(24), default="human", server_default="human", nullable=False
     )
-    # general | return_exchange: return tickets bypass the unresolved cap.
+    # general | return_exchange | refund: return tickets bypass the unresolved cap.
     category: Mapped[str] = mapped_column(
         String(32), default="general", server_default="general", nullable=False
     )
@@ -489,9 +489,38 @@ class HandoffTicket(Base, TimestampMixin):
     claimed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    assignee: Mapped["User | None"] = relationship(
+        foreign_keys=[assignee_id], lazy="joined"
+    )
     resolved_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # The administrator who actually completed the ticket. ``assignee_id`` is
+    # the claim owner; this field keeps completion attribution explicit.
+    resolved_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    resolved_by: Mapped["User | None"] = relationship(
+        foreign_keys=[resolved_by_id], lazy="joined"
+    )
+    # Customer-facing business state for the simulated refund/return flow.
+    business_status: Mapped[str] = mapped_column(
+        String(32), default="", server_default="", nullable=False
+    )
+    # One optional rating (1-5) and at most 50 characters of feedback per ticket.
+    rating: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    rating_comment: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    rated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    @property
+    def assignee_name(self) -> str:
+        return self.assignee.username if self.assignee else ""
+
+    @property
+    def resolved_by_name(self) -> str:
+        return self.resolved_by.username if self.resolved_by else ""
     # returned_to_agent | resolved_by_agent | timeout
     close_reason: Mapped[str] = mapped_column(
         String(24), default="", server_default="", nullable=False

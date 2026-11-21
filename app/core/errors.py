@@ -62,6 +62,13 @@ class ProviderBudgetExceededError(ProviderError):
     retryable = False
 
 
+class ProviderCircuitOpenError(ProviderError):
+    """Short-circuit a provider after repeated final failures."""
+
+    category = "circuit_open"
+    retryable = False
+
+
 def _is_quota_failure(response: httpx.Response) -> bool:
     """DashScope reports depleted free quota as HTTP 403, not a bad API key."""
     try:

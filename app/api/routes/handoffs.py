@@ -65,6 +65,11 @@ async def claim_handoff(
         ticket = await handoff_service.claim(session, handoff_id, admin)
     except handoff_service.HandoffNotFound:
         raise HTTPException(status_code=404, detail="工单不存在") from None
+    except handoff_service.HandoffForbidden:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="内部工单不能接入人工会话",
+        ) from None
     except handoff_service.HandoffConflict as exc:
         name = exc.assignee_name or "其他客服"
         raise HTTPException(
@@ -79,10 +84,66 @@ async def claim_handoff(
 async def update_handoff(
     handoff_id: int,
     payload: HandoffUpdate,
-    _admin: User = Depends(rate_limit_admin),
+    admin: User = Depends(rate_limit_admin),
     session: AsyncSession = Depends(get_session),
 ):
-    ticket = await handoff_service.update_status(session, handoff_id, payload.status)
+    ticket = await handoff_service.get_ticket(session, handoff_id)
+    if ticket is None:
+        raise HTTPException(status_code=404, detail="工单不存在")
+
+    if payload.status == "in_progress":
+        if ticket.kind != "human":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="内部工单不能接入人工会话",
+            )
+        if ticket.status == "resolved":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="已解决的工单不能重新接入",
+            )
+        if (
+            ticket.status == "in_progress"
+            and ticket.assignee_id is not None
+            and ticket.assignee_id != admin.id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="该工单已由其他客服接入",
+            )
+        if ticket.status != "in_progress" or ticket.assignee_id is None:
+            try:
+                ticket = await handoff_service.claim(session, handoff_id, admin)
+            except handoff_service.HandoffConflict as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"该工单已由 {exc.assignee_name or '其他客服'} 接入",
+                ) from None
+        await session.commit()
+        return HandoffTicketOut.model_validate(ticket)
+
+    if (
+        payload.status == "resolved"
+        and ticket.kind == "human"
+        and ticket.category in {"return_exchange", "refund"}
+        and (
+            ticket.status != "in_progress" or ticket.assignee_id != admin.id
+        )
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="退换货/退款工单需先点击处理中接入，并由接入的管理员解决",
+        )
+
+    try:
+        ticket = await handoff_service.update_status(
+            session, handoff_id, payload.status, admin
+        )
+    except handoff_service.HandoffForbidden:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="该工单当前不由你接待",
+        ) from None
     if ticket is None:
         raise HTTPException(status_code=404, detail="工单不存在")
     await session.commit()
@@ -135,7 +196,7 @@ async def reply_to_handoff(
     """Send a reply while keeping the session open for more messages."""
     try:
         message = await handoff_service.reply(
-            session, handoff_id, admin, payload.content
+            session, handoff_id, admin, payload.content, payload.action
         )
     except handoff_service.HandoffNotFound:
         raise HTTPException(status_code=404, detail="工单不存在") from None

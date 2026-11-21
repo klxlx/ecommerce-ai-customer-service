@@ -85,6 +85,19 @@ export function ReturnRequestModal({
     confirmed &&
     !submitting;
 
+  function submitValidation(): string {
+    if (!analysis?.passed) return "请先上传并通过商品照片识别";
+    if (!order) return "请先查询订单号";
+    if (!selectedItem) return "请选择要退换的商品";
+    if (damageType === "未知") return "请选择破损类型";
+    if (!damageLevel) return "请选择破损程度";
+    if (!reason) return "请选择退换原因";
+    if (address.trim().length < 5) return "请填写至少 5 个字的退货地址";
+    if (!/^1[3-9]\d{9}$/.test(phone)) return "请填写正确的 11 位手机号";
+    if (!confirmed) return "请勾选“照片与商品情况属实”确认";
+    return "";
+  }
+
   async function handleAnalyze(nextFile: File | null) {
     if (!nextFile) return;
     setFile(nextFile);
@@ -142,7 +155,12 @@ export function ReturnRequestModal({
   }
 
   async function handleSubmit() {
-    if (!analysis || !order || itemId == null || !canSubmit) return;
+    const validation = submitValidation();
+    if (validation) {
+      setError(validation);
+      return;
+    }
+    if (!analysis || !order || itemId == null) return;
     setSubmitting(true);
     setError("");
     try {
@@ -432,6 +450,12 @@ export function ReturnRequestModal({
               </>
             )}
 
+            {!canSubmit && !submitting && !error && (
+              <div className="conversation-time">
+                提交前还需：{submitValidation()}
+              </div>
+            )}
+
             {error && (
               <div className="error-text return-error" role="alert">
                 {error}
@@ -451,7 +475,8 @@ export function ReturnRequestModal({
                 type="button"
                 className="btn btn-primary"
                 onClick={handleSubmit}
-                disabled={!canSubmit}
+                disabled={submitting}
+                title={!canSubmit ? submitValidation() : undefined}
               >
                 {submitting ? "提交中…" : "提交退换货申请"}
               </button>

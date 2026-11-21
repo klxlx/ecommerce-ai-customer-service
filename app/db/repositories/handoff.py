@@ -47,13 +47,16 @@ async def create_handoff(
 
 
 async def list_unresolved_for_user(
-    session: AsyncSession, user_id: int
+    session: AsyncSession,
+    user_id: int,
+    kinds: tuple[str, ...] = ("human",),
 ) -> list[HandoffTicket]:
-    """Return every ticket still occupying the user's unresolved quota."""
+    """Return tickets still occupying the user's unresolved quota."""
     result = await session.execute(
         select(HandoffTicket)
         .where(
             HandoffTicket.user_id == user_id,
+            HandoffTicket.kind.in_(kinds),
             HandoffTicket.status.in_(("open", "in_progress")),
         )
         .order_by(HandoffTicket.created_at.asc(), HandoffTicket.id.asc())
@@ -187,3 +190,21 @@ async def message_counts(
         .group_by(ChatMessage.conversation_id)
     )
     return {conversation_id: count for conversation_id, count in result.all()}
+
+
+async def count_auto_small_refunds(
+    session: AsyncSession,
+    user_id: int,
+    *,
+    since: datetime,
+) -> int:
+    """Count simulated small-refund tickets created in the current window."""
+    result = await session.execute(
+        select(func.count(HandoffTicket.id)).where(
+            HandoffTicket.user_id == user_id,
+            HandoffTicket.category == "refund",
+            HandoffTicket.close_reason == "auto_small_refund",
+            HandoffTicket.created_at >= since,
+        )
+    )
+    return int(result.scalar_one() or 0)

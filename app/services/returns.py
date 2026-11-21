@@ -369,6 +369,12 @@ async def submit_request(
     analysis.consumed_at = datetime.now(timezone.utc)
 
     answer = RETURN_DUPLICATE_ANSWER if ticket_result.duplicate else RETURN_ANSWER
+    if not ticket_result.duplicate:
+        await handoff_service.add_status_notice(
+            session,
+            ticket_result.ticket,
+            "退换货申请已提交，客服会尽快处理。",
+        )
     assistant_message = await chat_repo.add_message(
         session,
         payload.conversation_id,

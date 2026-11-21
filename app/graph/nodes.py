@@ -7,6 +7,7 @@ deterministic templates built on SQL tool results, never from the LLM.
 
 from __future__ import annotations
 
+import asyncio
 import re
 from decimal import Decimal, InvalidOperation
 
@@ -30,6 +31,12 @@ from app.prompts.chitchat import build_chitchat_messages
 from app.schemas.after_sales import AfterSaleFact
 from app.schemas.catalog import AmbiguousProduct, ProductFact
 from app.schemas.orders import OrderFact
+from app.services.tone import (
+    deescalation_reply,
+    ensure_empathy,
+    handoff_reply,
+    is_pure_emotion,
+)
 from app.tools.after_sales import lookup_after_sales
 from app.tools.catalog import get_product_price_stock
 from app.tools.handoff import build_handoff_payload
@@ -42,7 +49,7 @@ from app.tools.weather import (
     is_weather_query,
 )
 
-REFUND_REVIEW_THRESHOLD = Decimal("500.00")
+REFUND_REVIEW_THRESHOLD = Decimal("10.00")
 
 GREETING_REPLY = (
     "你好呀！我是智能客服小天，也是您的购物客服助手，可以帮您解答商品咨询、"
@@ -121,57 +128,55 @@ async def _complete_answer(
     model: str | None = None,
     max_chars: int | None = None,
     sentinel: str | None = None,
+    empathy_text: str | None = None,
 ) -> str:
     """Complete an answer, forwarding model tokens when a sink is present.
 
-    ``sentinel`` lets the knowledge node suppress a machine-readable gap marker
-    before it reaches the customer's streaming bubble.
+    When ``sentinel`` is set, the whole generation is buffered before anything
+    reaches the customer. The knowledge prompt appends its gap marker after the
+    generated text, so streaming first and validating later would leak a partial
+    answer that is then replaced by the fixed fallback reply.
     """
     chat = state["chat"]
     sink = state.get("stream")
     stream_factory = getattr(chat, "stream", None)
     if sink is not None and callable(stream_factory):
         stream = stream_factory(messages, model=model)
-        parts: list[str] = []
-        total = 0
-        checking = sentinel is not None
-        prefix = ""
         try:
-            async for delta in stream:
-                if not delta:
-                    continue
-                if checking:
-                    prefix += delta
-                    lead = prefix.lstrip()
-                    if not lead:
+            if sentinel is not None:
+                parts: list[str] = []
+                async for delta in stream:
+                    if delta:
+                        parts.append(delta)
+                answer = "".join(parts).strip()
+                if answer and sentinel not in answer:
+                    if empathy_text:
+                        answer = ensure_empathy(empathy_text, answer)
+                    for start in range(0, len(answer), 12):
+                        await sink(answer[start : start + 12])
+                        await asyncio.sleep(0.01)
+                return answer
+            else:
+                parts: list[str] = []
+                total = 0
+                async for delta in stream:
+                    if not delta:
                         continue
-                    if lead.startswith(sentinel):
-                        return sentinel
-                    if sentinel.startswith(lead):
-                        continue
-                    checking = False
-                    parts.append(prefix)
-                    total += len(prefix)
-                    await sink(prefix)
-                    continue
-                if max_chars is not None:
-                    remaining = max_chars - total
-                    if remaining <= 0:
-                        break
-                    delta = delta[:remaining]
-                parts.append(delta)
-                total += len(delta)
-                await sink(delta)
-            if checking and prefix:
-                parts.append(prefix)
-                await sink(prefix)
+                    if max_chars is not None:
+                        remaining = max_chars - total
+                        if remaining <= 0:
+                            break
+                        delta = delta[:remaining]
+                    parts.append(delta)
+                    total += len(delta)
+                    await sink(delta)
+                answer = "".join(parts).strip()
+                if answer:
+                    return answer
         finally:
             close = getattr(stream, "aclose", None)
             if callable(close):
                 await close()
-        answer = "".join(parts).strip()
-        if answer:
-            return answer
 
     if model:
         return (await chat.complete(messages, model=model)).strip()
@@ -340,9 +345,6 @@ def _money_text(amount: Decimal) -> str:
 async def route_node(state: AgentState) -> dict:
     user_message = state.get("user_message", "").strip()
     existing_slots = state.get("slots", {})
-    pending = _pending_continuation(state)
-    if pending is not None:
-        return pending
     if is_greeting(user_message):
         return {"intent": "greeting", "slots": _clear_pending(existing_slots)}
     # "投诉规则/怎么投诉" is a policy question; only an actual complaint or
@@ -352,6 +354,17 @@ async def route_node(state: AgentState) -> dict:
         is_explicit_handoff(user_message) or is_complaint_or_urgent(user_message)
     ):
         return {"intent": "handoff", "slots": _clear_pending(existing_slots)}
+    # Pure hostility or emotional venting must never enter ticket-limit logic.
+    # A mixed message ("气死了，退款怎么还没到") still goes to its business
+    # node, where the answer prompt applies empathy before the factual reply.
+    if is_pure_emotion(user_message):
+        return {
+            "intent": "deescalation",
+            "slots": _clear_pending(existing_slots),
+        }
+    pending = _pending_continuation(state)
+    if pending is not None:
+        return pending
     if is_after_sale_progress_query(user_message) or is_new_after_sale_request(
         user_message
     ):
@@ -450,6 +463,7 @@ async def knowledge_node(state: AgentState) -> dict:
         messages,
         model=model,
         sentinel=KNOWLEDGE_GAP_MARKER,
+        empathy_text=current,
     )
     answer = answer.strip()
     if KNOWLEDGE_GAP_MARKER in answer or (
@@ -492,7 +506,7 @@ async def catalog_node(state: AgentState) -> dict:
     except Exception:
         return {
             "intent": "handoff",
-            "answer": "查询商品信息时遇到问题，已为您转接人工客服。",
+            "answer": KNOWLEDGE_GAP_REPLY,
             "handoff": _build_handoff(state, "工具查询失败"),
         }
 
@@ -536,7 +550,7 @@ async def order_node(state: AgentState) -> dict:
         except Exception:
             return {
                 "intent": "handoff",
-                "answer": "查询订单列表时遇到问题，已为您转接人工客服。",
+                "answer": KNOWLEDGE_GAP_REPLY,
                 "handoff": _build_handoff(state, "工具查询失败"),
             }
         if not facts:
@@ -568,7 +582,7 @@ async def order_node(state: AgentState) -> dict:
     except Exception:
         return {
             "intent": "handoff",
-            "answer": "查询订单时遇到问题，已为您转接人工客服。",
+            "answer": KNOWLEDGE_GAP_REPLY,
             "handoff": _build_handoff(state, "工具查询失败"),
         }
 
@@ -688,11 +702,11 @@ async def after_sale_node(state: AgentState) -> dict:
             order_no=order_no,
             order_status=None,
             service_type=service_type,
-            handoff_required=True,
+            handoff_required=False,
         )
         return {
             "intent": "handoff",
-            "answer": "查询售后信息时遇到问题，已为您转接人工客服。",
+            "answer": KNOWLEDGE_GAP_REPLY,
             "handoff": _build_handoff(state, "工具查询失败"),
             "tool_evidence": evidence,
             "after_sale_context": after_sale_context,
@@ -723,7 +737,7 @@ async def after_sale_node(state: AgentState) -> dict:
         except Exception:
             return {
                 "intent": "handoff",
-                "answer": "查询售后记录时遇到问题，已为您转接人工客服。",
+                "answer": KNOWLEDGE_GAP_REPLY,
                 "handoff": _build_handoff(state, "工具查询失败"),
                 "tool_evidence": evidence,
                 "after_sale_context": _after_sale_context(
@@ -731,7 +745,7 @@ async def after_sale_node(state: AgentState) -> dict:
                     order_no=order_no,
                     order_status=order.status,
                     service_type=service_type,
-                    handoff_required=True,
+                    handoff_required=False,
                 ),
             }
         if facts is None:
@@ -820,30 +834,57 @@ async def after_sale_node(state: AgentState) -> dict:
         or _message_refund_amount(state.get("user_message", ""))
         or order.total_amount
     )
-    exceeded = requested_amount > REFUND_REVIEW_THRESHOLD
+    small_refund = requested_amount < REFUND_REVIEW_THRESHOLD
+    exceeded = requested_amount >= REFUND_REVIEW_THRESHOLD
     evidence["threshold"] = {
         "applied": True,
         "amount": _money_text(requested_amount),
         "limit": _money_text(REFUND_REVIEW_THRESHOLD),
         "exceeded": exceeded,
+        "auto_small_refund": small_refund,
     }
     evidence["after_sale"] = []
+
+    if small_refund:
+        handoff_state = dict(state)
+        handoff_state["tool_evidence"] = evidence
+        handoff = _build_handoff(handoff_state, "small_refund_auto_resolved")
+        handoff["category"] = "refund"
+        handoff["auto_resolve"] = True
+        return {
+            "intent": "after_sale",
+            "answer": (
+                f"您的退款申请金额 ¥{_money_text(requested_amount)} 元，"
+                "已按小额退款流程受理并标记为已解决；"
+                "退款到账请以支付渠道通知为准。"
+            ),
+            "handoff": handoff,
+            "tool_evidence": evidence,
+            "after_sale_context": _after_sale_context(
+                status="no_records",
+                order_no=order_no,
+                order_status=order.status,
+                service_type=service_type,
+            ),
+        }
 
     if exceeded:
         reason = (
             f"新退款金额 {_money_text(requested_amount)} 元"
-            f"超过 {_money_text(REFUND_REVIEW_THRESHOLD)} 元自动受理上限"
+            f"达到 {_money_text(REFUND_REVIEW_THRESHOLD)} 元人工审核线"
         )
         handoff_state = dict(state)
         handoff_state["tool_evidence"] = evidence
+        handoff = _build_handoff(handoff_state, reason)
+        handoff["category"] = "refund"
         return {
             "intent": "handoff",
             "answer": (
-                f"您的退款金额 ¥{_money_text(requested_amount)} 元超过 "
-                f"{_money_text(REFUND_REVIEW_THRESHOLD)} 元，"
+                f"您的退款金额 ¥{_money_text(requested_amount)} 元达到 "
+                f"{_money_text(REFUND_REVIEW_THRESHOLD)} 元人工审核线，"
                 "需要人工客服进一步核实，已为您转接人工客服。"
             ),
-            "handoff": _build_handoff(handoff_state, reason),
+            "handoff": handoff,
             "tool_evidence": evidence,
             "after_sale_context": _after_sale_context(
                 status="no_records",
@@ -884,6 +925,14 @@ def _truncate_at_sentence(text: str, max_chars: int) -> str:
     if best >= max_chars // 2:
         return window[: best + 1].rstrip()
     return window.rstrip()
+
+
+async def deescalation_node(state: AgentState) -> dict:
+    """Answer pure emotion safely, without creating a needless ticket."""
+    return {
+        "intent": "deescalation",
+        "answer": deescalation_reply(state.get("user_message", "")),
+    }
 
 
 async def chitchat_node(state: AgentState) -> dict:
@@ -985,6 +1034,6 @@ async def clarification_node(state: AgentState) -> dict:
 async def handoff_node(state: AgentState) -> dict:
     return {
         "intent": "handoff",
-        "answer": "已为您转接人工客服，客服会尽快与您联系。",
+        "answer": handoff_reply(state.get("user_message", "")),
         "handoff": _build_handoff(state, "用户请求人工服务"),
     }

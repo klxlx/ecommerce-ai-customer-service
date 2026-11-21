@@ -13,18 +13,24 @@ from app.core.metrics import MetricsRegistry
 from app.db.models import User
 from app.db.repositories import chat as chat_repo
 from app.graph.builder import Container, build_graph
+from app.graph.nodes import KNOWLEDGE_GAP_REPLY
 from app.graph.state import AgentState
 from app.schemas.chat import ChatResponse
 from app.services import handoff as handoff_service
 from app.services import semantic_cache as semantic_cache_service
 from app.services import sentinel as sentinel_service
+from app.services.tone import (
+    active_handoff_reply,
+    ensure_empathy,
+    style_cached_answer,
+)
 
 DEFAULT_CONVERSATION_TITLE = "智能客服"
 NEW_CONVERSATION_GREETING = (
     "你好呀！我是你的智能客服小天，请问有什么能够帮到你的？"
 )
 PROVIDER_FAILURE_ANSWER = (
-    "抱歉，智能客服暂时不可用，已为您转接人工客服，请稍候。"
+    "抱歉，智能客服系统暂时繁忙，您的请求已记录，请稍后重试。"
 )
 DUPLICATE_TICKET_REPLY = "您反馈的这个问题已经在处理中，请稍候。"
 
@@ -70,12 +76,21 @@ async def run_chat(
         user_message = await chat_repo.add_message(
             session, conversation.id, "user", message
         )
+        answer = active_handoff_reply(message)
+        assistant_message = await chat_repo.add_message(
+            session,
+            conversation.id,
+            "assistant",
+            answer,
+            intent="handoff",
+            trace_id=None,
+        )
         await session.commit()
         if metrics:
             metrics.increment("chat.request.total")
             metrics.increment("chat.success.total")
         return ChatResponse(
-            answer="消息已发送给人工客服，请稍候。",
+            answer=answer,
             sources=[],
             handoff={
                 "id": active_handoff.id,
@@ -83,7 +98,7 @@ async def run_chat(
                 "reason": "",
             },
             conversation_id=conversation.id,
-            message_id=user_message.id,
+            message_id=assistant_message.id,
         )
 
     prior_messages = await chat_repo.list_messages(session, conversation.id)
@@ -121,6 +136,9 @@ async def run_chat(
                 }
             },
         )
+        cached_answer = style_cached_answer(
+            entry.answer, entry.kb_type, message
+        )
         await chat_repo.create_tool_call_log(
             session,
             agent_run.id,
@@ -135,20 +153,23 @@ async def run_chat(
             session,
             conversation.id,
             "assistant",
-            entry.answer,
+            cached_answer,
             intent=intent,
             sources=entry.sources,
             trace_id=agent_run.id,
         )
         if conversation.title == DEFAULT_CONVERSATION_TITLE:
             conversation.title = message[:20] or DEFAULT_CONVERSATION_TITLE
+        # A curated business answer is not a chit-chat turn; reset the streak so
+        # a cached FAQ cannot leave a previous greeting count behind.
+        conversation.chit_chat_streak = 0
         await session.commit()
         if metrics:
             metrics.increment("semantic_cache.hit.total")
             metrics.increment("chat.success.total")
             metrics.observe("chat.latency_ms", 0)
         return ChatResponse(
-            answer=entry.answer,
+            answer=cached_answer,
             intent=intent,
             sources=entry.sources or [],
             cached=True,
@@ -251,6 +272,10 @@ async def _persist_result(
 ) -> ChatResponse:
     intent = result.get("intent")
     answer = result.get("answer") or "抱歉，我暂时无法处理您的请求。"
+    # Deterministic templates and non-streamed knowledge answers are finalized
+    # here. For streamed answers the empathy opener is already sent by the
+    # knowledge node, so this call is a no-op when it sees the same prefix.
+    answer = ensure_empathy(message, answer)
     sources = result.get("sources") or []
     tool_evidence = result.get("tool_evidence") or {}
     handoff_payload = result.get("handoff")
@@ -286,62 +311,186 @@ async def _persist_result(
     ticket_policy: dict | None = None
     handoff_out = None
     limit_exceeded = False
+    internal_reason: str | None = None
+    internal_intent: str | None = None
 
     if handoff_payload:
         reason = str(handoff_payload.get("reason") or "")
         threshold = tool_evidence.get("threshold")
-        exception = handoff_service.is_ticket_limit_exception(message, reason)
-        if isinstance(threshold, dict) and threshold.get("exceeded") is True:
-            exception = True
-        if "provider_failure" in tool_evidence:
-            exception = True
-        try:
-            ticket_result = await handoff_service.create_or_reuse_ticket(
+        policy_reason = (
+            "threshold_exceeded"
+            if isinstance(threshold, dict) and threshold.get("exceeded") is True
+            else reason
+        )
+        is_provider_failure = (
+            "provider_failure" in tool_evidence or reason == "provider_failure"
+        )
+        is_tool_failure = (
+            "tool_failure" in tool_evidence
+            or reason == "tool_failure"
+            or "工具查询失败" in reason
+        )
+        is_internal = is_provider_failure or is_tool_failure
+        if is_internal:
+            internal_reason = reason
+            internal_intent = (
+                "provider_failure" if is_provider_failure else "knowledge_gap"
+            )
+        kind = (
+            "knowledge_gap"
+            if is_knowledge_gap
+            else "internal" if is_internal else "human"
+        )
+        if is_tool_failure and not is_provider_failure:
+            # Tool failures and knowledge gaps share the same customer-safe
+            # wording; never leak the internal failure taxonomy.
+            answer = KNOWLEDGE_GAP_REPLY
+        exception = (
+            is_internal
+            or is_knowledge_gap
+            or handoff_service.is_ticket_limit_exception(message, reason)
+            or (
+                isinstance(threshold, dict)
+                and threshold.get("exceeded") is True
+            )
+        )
+        auto_small = (
+            kind == "human"
+            and bool(handoff_payload.get("auto_resolve"))
+            and (handoff_payload.get("category") or "") == "refund"
+        )
+        auto_ticket = None
+        if auto_small:
+            auto_ticket = await handoff_service.create_auto_small_refund_ticket(
                 session,
                 conversation_id=conversation.id,
                 user_id=user.id,
-                question=message,
                 summary=handoff_payload.get("summary", message),
                 slots=handoff_payload.get("slots", {}),
                 recent_messages=[{"role": "user", "content": message}],
                 evidence=handoff_payload.get("evidence", {}),
-                kind="knowledge_gap" if is_knowledge_gap else "human",
-                exception=exception,
-                settings=container.settings,
-                embeddings=container.providers.embeddings,
             )
-            ticket = ticket_result.ticket
+            if auto_ticket is None:
+                # Daily cap reached: downgrade the same request to a normal
+                # human-review ticket instead of silently auto-refunding.
+                handoff_payload["auto_resolve"] = False
+                handoff_payload["reason"] = "small_refund_daily_limit"
+                reason = "small_refund_daily_limit"
+                policy_reason = reason
+                answer = (
+                    "今天的小额退款自动处理次数已用完，已转人工审核，请稍候。"
+                )
+                intent = "handoff"
+                result["intent"] = intent
+                auto_small = False
+
+        if auto_ticket is not None:
             ticket_policy = {
-                "action": "reused" if ticket_result.duplicate else "created",
-                "ticket_id": ticket.id,
-                "active_count": ticket_result.active_count,
-                "similarity": (
-                    round(ticket_result.similarity, 4)
-                    if ticket_result.similarity is not None
-                    else None
-                ),
-                "escalated": ticket_result.escalated,
+                "action": "created",
+                "ticket_id": auto_ticket.id,
+                "active_count": 0,
+                "similarity": None,
+                "escalated": False,
+                "auto_small_refund": True,
+                "kind": "human",
+                "reason": "small_refund_auto_resolved",
             }
-            if not is_knowledge_gap:
-                if ticket_result.duplicate and not ticket_result.escalated:
-                    answer = DUPLICATE_TICKET_REPLY
-                handoff_out = {
-                    "id": ticket.id,
-                    "status": ticket.status,
-                    "reason": reason,
+            handoff_out = {
+                "id": auto_ticket.id,
+                "status": "resolved",
+                "reason": "small_refund_auto_resolved",
+            }
+            await handoff_service.add_final_feedback(
+                session,
+                auto_ticket,
+                "您的退款申请已受理，工单已标记为已解决；退款到账请以支付渠道通知为准。",
+            )
+            await session.flush()
+        else:
+            try:
+                ticket_result = await handoff_service.create_or_reuse_ticket(
+                    session,
+                    conversation_id=conversation.id,
+                    user_id=user.id,
+                    question=message,
+                    summary=handoff_payload.get("summary", message),
+                    slots=handoff_payload.get("slots", {}),
+                    recent_messages=[{"role": "user", "content": message}],
+                    evidence=handoff_payload.get("evidence", {}),
+                    kind=kind,
+                    category=handoff_payload.get("category") or "general",
+                    exception=exception,
+                    settings=container.settings,
+                    embeddings=container.providers.embeddings,
+                )
+                ticket = ticket_result.ticket
+                if kind == "internal":
+                    internal_kind = (
+                        "tool_failure" if is_tool_failure else "provider_failure"
+                    )
+                    ticket.evidence = {
+                        **(ticket.evidence or {}),
+                        "internal_kind": internal_kind,
+                    }
+                    ticket.business_status = (
+                        "工具待修复" if is_tool_failure else "服务待恢复"
+                    )
+                    await session.flush()
+                elif kind == "knowledge_gap":
+                    ticket.business_status = "待补全"
+                    await session.flush()
+                ticket_policy = {
+                    "action": "reused" if ticket_result.duplicate else "created",
+                    "ticket_id": ticket.id,
+                    "active_count": ticket_result.active_count,
+                    "similarity": (
+                        round(ticket_result.similarity, 4)
+                        if ticket_result.similarity is not None
+                        else None
+                    ),
+                    "escalated": ticket_result.escalated,
+                    "kind": kind,
+                    "reason": policy_reason,
                 }
-        except handoff_service.HandoffLimitExceeded as error:
-            limit_exceeded = True
-            answer = handoff_service.ticket_limit_reply(error.tickets)
-            ticket_policy = {
-                "action": "limit_exceeded",
-                "ticket_ids": [ticket.id for ticket in error.tickets],
-                "active_count": len(error.tickets),
-            }
-            # The graph produced a handoff payload, but no ticket was created.
-            # Clear it so callers and metrics do not report a false transfer.
-            result["handoff"] = None
-            handoff_payload = None
+                if kind == "human":
+                    if ticket_result.duplicate and not ticket_result.escalated:
+                        answer = DUPLICATE_TICKET_REPLY
+                    handoff_out = {
+                        "id": ticket.id,
+                        "status": ticket.status,
+                        "reason": reason,
+                    }
+                    if ticket.category == "return_exchange":
+                        notice = "退换货申请已提交，客服会尽快处理。"
+                    elif ticket.category == "refund":
+                        notice = "已收到您的退款请求，已创建人工工单，客服会尽快处理。"
+                    else:
+                        notice = "已收到您的反馈，已创建人工工单，客服会尽快处理。"
+                    if ticket_result.created or ticket_result.escalated:
+                        await handoff_service.add_status_notice(
+                            session, ticket, notice
+                        )
+            except handoff_service.HandoffLimitExceeded as error:
+                limit_exceeded = True
+                answer = handoff_service.ticket_limit_reply(
+                    error.tickets, message=message
+                )
+                ticket_policy = {
+                    "action": "limit_exceeded",
+                    "ticket_ids": [ticket.id for ticket in error.tickets],
+                    "active_count": len(error.tickets),
+                }
+                # The graph produced a handoff payload, but no ticket was created.
+                # Clear it so callers and metrics do not report a false transfer.
+                result["handoff"] = None
+                handoff_payload = None
+
+    if internal_intent:
+        # Internal failure tickets must never render the customer-facing
+        # "transferred to human" notice.
+        intent = internal_intent
+        result["intent"] = intent
+        result["handoff"] = None
 
     result["ticket_policy"] = ticket_policy
     trace = {
@@ -352,7 +501,11 @@ async def _persist_result(
         "handoff_reason": (
             None
             if is_knowledge_gap or limit_exceeded
-            else handoff_payload.get("reason") if handoff_payload else None
+            else (
+                internal_reason
+                if internal_reason
+                else handoff_payload.get("reason") if handoff_payload else None
+            )
         ),
         "knowledge_gap": is_knowledge_gap and not limit_exceeded,
         "ticket_policy": ticket_policy,
@@ -468,9 +621,12 @@ def _record_turn_metrics(metrics: MetricsRegistry, result: dict) -> None:
     policy = result.get("ticket_policy") or {}
     action = policy.get("action")
     reason = (
-        "knowledge_unavailable"
-        if intent == "knowledge_gap"
-        else _handoff_reason(handoff, evidence) if handoff else "other"
+        policy.get("reason")
+        or (
+            "knowledge_unavailable"
+            if intent == "knowledge_gap"
+            else _handoff_reason(handoff, evidence) if handoff else "other"
+        )
     )
     if action == "created":
         metrics.increment("handoff.created.total", reason=reason)

@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Headset, LogOut, Send, UserRound } from "lucide-react";
+import { Headset, LogOut, PackageOpen, Send, UserRound } from "lucide-react";
 import {
   claimHandoff,
   listHandoffMessages,
@@ -99,13 +99,35 @@ export function LiveConsolePage() {
     },
   });
 
+  const returnPopupMutation = useMutation({
+    mutationFn: () =>
+      sendHandoffReply(
+        selectedId as number,
+        "请填写退货信息，我会协助您完成退换货申请。",
+        "return_request",
+      ),
+    onSuccess: () => {
+      setNotice("已向顾客发送退货弹窗，当前工单已标记为退换货。");
+      queryClient.invalidateQueries({
+        queryKey: ["admin", "live", selectedId, "messages"],
+      });
+      queryClient.invalidateQueries({ queryKey: ["admin", "live"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "handoffs"] });
+    },
+  });
+
   const mine =
     selected !== null &&
     selected.status === "in_progress" &&
     selected.assignee_id === user?.id;
+  const canClaim =
+    selected !== null &&
+    (selected.status === "open" ||
+      (selected.status === "in_progress" && selected.assignee_id === null));
   const claimedByOther =
     selected !== null &&
     selected.status === "in_progress" &&
+    selected.assignee_id !== null &&
     selected.assignee_id !== user?.id;
 
   const waiting = sessions.filter((session) => session.status === "open");
@@ -178,22 +200,42 @@ export function LiveConsolePage() {
                     <UserRound size={16} />
                     <strong>{selected.username || `顾客 #${selected.user_id}`}</strong>
                     <span className={`pill pill-${selected.status}`}>
-                      {selected.status === "open" ? "待接入" : "接待中"}
+                      {selected.status === "open" ||
+                      selected.assignee_id === null
+                        ? "待接入"
+                        : "接待中"}
                     </span>
                   </div>
                   <div className="conversation-time">
-                    等待 {waitedMinutes(selected.created_at)} 分钟 · 工单 #{selected.id}
+                    接待人：{selected.assignee_name || "待接入"} · 等待{" "}
+                    {waitedMinutes(selected.created_at)} 分钟 · 工单 #{selected.id}
                   </div>
                 </div>
                 <div className="cs-head-actions">
-                  {selected.status === "open" && (
+                  {canClaim && (
                     <button
                       className="btn btn-primary"
                       disabled={claimMutation.isPending}
                       onClick={() => claimMutation.mutate(selected.id)}
                     >
                       <Headset size={16} />
-                      {claimMutation.isPending ? "接入中…" : "接入会话"}
+                      {claimMutation.isPending
+                        ? "接入中…"
+                        : selected.status === "open"
+                          ? "接入会话"
+                          : "重新接入"}
+                    </button>
+                  )}
+                  {mine && selected.category !== "return_exchange" && (
+                    <button
+                      className="btn btn-secondary"
+                      disabled={returnPopupMutation.isPending}
+                      onClick={() => returnPopupMutation.mutate()}
+                    >
+                      <PackageOpen size={16} />
+                      {returnPopupMutation.isPending
+                        ? "发送中…"
+                        : "发送退货弹窗"}
                     </button>
                   )}
                   {mine && (
@@ -217,6 +259,13 @@ export function LiveConsolePage() {
                   {claimMutation.error instanceof Error
                     ? claimMutation.error.message
                     : "接入失败，请重试"}
+                </div>
+              )}
+              {returnPopupMutation.error && (
+                <div className="error-text cs-alert" role="alert">
+                  {returnPopupMutation.error instanceof Error
+                    ? returnPopupMutation.error.message
+                    : "退货弹窗发送失败，请重试"}
                 </div>
               )}
               {claimedByOther && (
@@ -280,7 +329,7 @@ export function LiveConsolePage() {
                 </div>
               ) : (
                 <div className="chat-composer cs-composer cs-composer-locked">
-                  {selected.status === "open"
+                  {canClaim
                     ? "接入会话后即可回复顾客。"
                     : `会话由 ${selected.assignee_name || "其他客服"} 接待中，暂不可回复。`}
                 </div>
@@ -394,7 +443,8 @@ function SessionGroup({
                 {mine
                   ? "我接待中"
                   : session.status === "in_progress"
-                    ? session.assignee_name || "接待中"
+                    ? session.assignee_name ||
+                      (session.assignee_id ? "接待中" : "待重新接入")
                     : "待接入"}
               </span>
             </div>

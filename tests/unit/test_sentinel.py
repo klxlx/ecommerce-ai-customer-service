@@ -26,6 +26,7 @@ class SentinelChat:
 
 def _container(chat, **overrides):
     settings = Settings(
+        _env_file=None,
         SENTINEL_ENABLED=True,
         SENTINEL_TIMEOUT_SECONDS=0.02,
         ROUTER_MODEL="qwen-plus",
