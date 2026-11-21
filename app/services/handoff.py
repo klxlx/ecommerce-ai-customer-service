@@ -18,6 +18,11 @@ from app.db.repositories import auth as auth_repo
 from app.db.repositories import chat as chat_repo
 from app.db.repositories import handoff as handoff_repo
 from app.graph.router import is_complaint_or_urgent
+from app.services import ticket_feedback
+from app.services.tone import emotion_kind
+from app.tools.local_time import SHANGHAI_TZ
+
+AUTO_SMALL_REFUND_DAILY_LIMIT = 3
 
 
 class HandoffError(Exception):
@@ -121,8 +126,15 @@ def normalize_question(text: str) -> str:
     return normalized
 
 
-def ticket_limit_reply(tickets: list[HandoffTicket]) -> str:
-    """Build the customer-facing message when the unresolved limit is hit."""
+def ticket_limit_reply(
+    tickets: list[HandoffTicket], *, message: str = ""
+) -> str:
+    """Build the customer-facing message when the unresolved limit is hit.
+
+    The old wording ("your service requests are too many") blamed the customer
+    and appeared even when the latest message was hostile or distressed. The
+    revised wording apologises for the wait and acknowledges emotion first.
+    """
     summaries: list[str] = []
     for ticket in tickets[:MAX_UNRESOLVED_TICKETS]:
         summary = " ".join((ticket.summary or "").split()).strip()
@@ -132,7 +144,19 @@ def ticket_limit_reply(tickets: list[HandoffTicket]) -> str:
             summary = f"{summary[:MAX_SUMMARY_CHARS].rstrip('，,。；;、')}…"
         summaries.append(summary)
     quoted = "和".join(f"“{summary}”" for summary in summaries)
-    return f"抱歉，您的服务需求太多了，我们先处理{quoted}问题吧。"
+    kind = emotion_kind(message)
+    if kind == "none" and re.search(
+        r"(投诉|举报|12315|差评|曝光)", message or ""
+    ):
+        kind = "anger"
+    if kind != "none":
+        opener = "非常抱歉让您久等了，您的心情我理解，请先别着急。"
+    else:
+        opener = "抱歉让您久等了。"
+    return (
+        f"{opener}您之前反馈的{quoted}还在处理中，"
+        "我已把您现在的问题一起记下，会优先为您跟进。"
+    )
 
 
 def _cosine(left: list[float] | None, right: list[float] | None) -> float | None:
@@ -280,7 +304,16 @@ async def create_or_reuse_ticket(
         text("SELECT pg_advisory_xact_lock(CAST(:key AS bigint))"),
         {"key": user_id},
     )
-    active = await handoff_repo.list_unresolved_for_user(session, user_id)
+    active_kinds = (
+        ("human", "knowledge_gap")
+        if kind in {"human", "knowledge_gap"}
+        else (kind,)
+    )
+    active = await handoff_repo.list_unresolved_for_user(
+        session,
+        user_id,
+        kinds=active_kinds,
+    )
 
     duplicate: HandoffTicket | None = None
     duplicate_similarity: float | None = None
@@ -340,6 +373,7 @@ async def create_or_reuse_ticket(
         ticket
         for ticket in active
         if ticket.category != "return_exchange"
+        and ticket.kind in {"human", "knowledge_gap"}
     ]
     if len(countable) >= max_unresolved and not exception:
         raise HandoffLimitExceeded(countable[:max_unresolved])
@@ -359,6 +393,9 @@ async def create_or_reuse_ticket(
         occurrence_count=1,
         last_seen_at=now,
     )
+    if kind == "human" and category in {"refund", "return_exchange"}:
+        ticket.business_status = "待处理"
+        await session.flush()
     return TicketCreationResult(
         ticket=ticket,
         created=True,
@@ -399,6 +436,7 @@ async def create_return_ticket(
         ):
             ticket.occurrence_count = (ticket.occurrence_count or 1) + 1
             ticket.last_seen_at = now
+            ticket.business_status = ticket.business_status or "退换货"
             await session.flush()
             return TicketCreationResult(
                 ticket=ticket,
@@ -423,6 +461,8 @@ async def create_return_ticket(
         occurrence_count=1,
         last_seen_at=now,
     )
+    ticket.business_status = "退换货"
+    await session.flush()
     return TicketCreationResult(
         ticket=ticket,
         created=True,
@@ -456,8 +496,13 @@ async def create_ticket(
     evidence: dict,
     kind: str = "human",
     category: str = "general",
+    status: str = "open",
+    business_status: str = "",
+    close_reason: str = "",
+    resolution_note: str = "",
+    resolved_by_id: int | None = None,
 ) -> HandoffTicket:
-    return await handoff_repo.create_handoff(
+    ticket = await handoff_repo.create_handoff(
         session,
         conversation_id=conversation_id,
         user_id=user_id,
@@ -465,9 +510,90 @@ async def create_ticket(
         slots=slots,
         recent_messages=recent_messages,
         evidence=evidence,
+        status=status,
         kind=kind,
         category=category,
     )
+    ticket.business_status = business_status
+    ticket.close_reason = close_reason
+    ticket.resolution_note = resolution_note
+    if status == "resolved":
+        ticket.resolved_at = datetime.now(timezone.utc)
+        ticket.resolved_by_id = resolved_by_id
+    await session.flush()
+    await session.refresh(ticket)
+    return ticket
+
+
+async def create_auto_small_refund_ticket(
+    session: AsyncSession,
+    *,
+    conversation_id: int,
+    user_id: int,
+    summary: str,
+    slots: dict,
+    recent_messages: list,
+    evidence: dict,
+) -> HandoffTicket | None:
+    """Create an already-resolved small-refund ticket within the daily cap."""
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(CAST(:key AS bigint))"),
+        {"key": user_id},
+    )
+    if (
+        await count_auto_small_refunds_today(session, user_id)
+        >= AUTO_SMALL_REFUND_DAILY_LIMIT
+    ):
+        return None
+    return await create_ticket(
+        session,
+        conversation_id=conversation_id,
+        user_id=user_id,
+        summary=summary,
+        slots=slots,
+        recent_messages=recent_messages,
+        evidence=evidence,
+        kind="human",
+        category="refund",
+        status="resolved",
+        business_status="已解决",
+        close_reason="auto_small_refund",
+        resolution_note="小额退款自动处理（模拟状态，未实际退款）",
+    )
+
+
+def shanghai_day_start(now: datetime | None = None) -> datetime:
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    local = current.astimezone(SHANGHAI_TZ)
+    return local.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(
+        timezone.utc
+    )
+
+
+async def count_auto_small_refunds_today(
+    session: AsyncSession, user_id: int
+) -> int:
+    return await handoff_repo.count_auto_small_refunds(
+        session,
+        user_id,
+        since=shanghai_day_start(),
+    )
+
+
+async def add_final_feedback(
+    session: AsyncSession,
+    ticket: HandoffTicket,
+    content: str = "本次人工服务已结束，工单已处理完成，智能体继续为您服务。",
+) -> None:
+    await ticket_feedback.add_final_feedback(session, ticket, content)
+
+
+async def add_status_notice(
+    session: AsyncSession, ticket: HandoffTicket, content: str
+) -> None:
+    await ticket_feedback.add_status_notice(session, ticket, content)
 
 
 async def list_tickets(
@@ -493,6 +619,7 @@ async def get_active_ticket(
 async def live_sessions(session: AsyncSession) -> list[dict]:
     """Serialize the active queue for the human-agent console."""
     tickets = await handoff_repo.list_active(session)
+    tickets = [ticket for ticket in tickets if ticket.kind == "human"]
     if not tickets:
         return []
 
@@ -539,6 +666,11 @@ async def claim(
     session: AsyncSession, handoff_id: int, admin: User
 ) -> HandoffTicket:
     """Claim a waiting ticket for ``admin`` or raise a typed error."""
+    existing = await handoff_repo.get_handoff(session, handoff_id)
+    if existing is None:
+        raise HandoffNotFound
+    if existing.kind != "human":
+        raise HandoffForbidden
     claimed = await handoff_repo.claim(session, handoff_id, admin.id)
     if not claimed:
         ticket = await handoff_repo.get_handoff(session, handoff_id)
@@ -557,12 +689,15 @@ async def claim(
     ticket = await handoff_repo.get_handoff(session, handoff_id)
     if ticket is None:  # pragma: no cover - guarded by the update above
         raise HandoffNotFound
+    if ticket.kind == "human":
+        ticket.business_status = "处理中"
     await chat_repo.add_message(
         session,
         ticket.conversation_id,
         "system",
         "人工客服已接入，请稍候。",
     )
+    await session.flush()
     await session.refresh(ticket)
     return ticket
 
@@ -570,13 +705,19 @@ async def claim(
 def _require_owner(ticket: HandoffTicket | None, admin: User) -> HandoffTicket:
     if ticket is None:
         raise HandoffNotFound
+    if ticket.kind != "human":
+        raise HandoffForbidden
     if ticket.status != "in_progress" or ticket.assignee_id != admin.id:
         raise HandoffForbidden
     return ticket
 
 
 async def reply(
-    session: AsyncSession, handoff_id: int, admin: User, content: str
+    session: AsyncSession,
+    handoff_id: int,
+    admin: User,
+    content: str,
+    action: str | None = None,
 ) -> ChatMessage:
     """Append a human-agent reply without ending the session.
 
@@ -591,12 +732,21 @@ async def reply(
     ):
         ticket = await claim(session, handoff_id, admin)
     ticket = _require_owner(ticket, admin)
+    if action == "return_request":
+        # The administrator's return pop-up is the second return/exchange
+        # intake channel; keep the same ticket and only change its business
+        # classification.
+        ticket.category = "return_exchange"
+        ticket.business_status = "退换货"
+    actions = [{"type": action}] if action else None
     message = await chat_repo.add_message(
         session,
         ticket.conversation_id,
         "admin",
         content,
+        actions=actions,
     )
+    await session.flush()
     await session.refresh(ticket)
     return message
 
@@ -612,17 +762,19 @@ async def release(
         await handoff_repo.get_handoff(session, handoff_id), admin
     )
     now = datetime.now(timezone.utc)
-    ticket.status = "resolved"
-    ticket.resolved_at = now
-    ticket.close_reason = "returned_to_agent"
-    ticket.resolution_note = note
-
-    await chat_repo.add_message(
-        session,
-        ticket.conversation_id,
-        "system",
-        "人工服务已结束，智能体继续为您服务。",
+    ticket_feedback.mark_resolved(
+        ticket,
+        resolved_by_id=admin.id,
+        business_status="已解决",
+        close_reason="returned_to_agent",
+        resolution_note=note,
     )
+    if ticket.kind == "human":
+        await ticket_feedback.add_final_feedback(
+            session,
+            ticket,
+            "本次人工服务已结束，智能体继续为您服务。",
+        )
 
     conversation = await chat_repo.get_conversation(
         session, ticket.conversation_id
@@ -641,27 +793,49 @@ async def release(
     return ticket
 
 
+def _resolution_labels(ticket: HandoffTicket) -> tuple[str, str]:
+    """Return the admin-visible business status and close reason."""
+    if ticket.kind == "knowledge_gap":
+        return "知识已补全", "knowledge_patched"
+    if ticket.kind == "internal":
+        evidence = ticket.evidence or {}
+        if (
+            evidence.get("internal_kind") == "tool_failure"
+            or "tool_failure" in evidence
+        ):
+            return "工具已修复", "tool_repaired"
+        return "已处理", "internal_handled"
+    return "已解决", ticket.close_reason or "marked_resolved"
+
+
 async def update_status(
-    session: AsyncSession, handoff_id: int, status: str
+    session: AsyncSession,
+    handoff_id: int,
+    status: str,
+    admin: User | None = None,
 ) -> HandoffTicket | None:
     ticket = await handoff_repo.get_handoff(session, handoff_id)
     if ticket is None:
         return None
 
-    if status == "resolved" and ticket.status != "resolved":
-        # The queue may close a ticket directly; keep the customer-facing
-        # handback consistent with the live console release flow. Knowledge-gap
-        # tickets never entered human service, so they must stay silent.
-        ticket.resolved_at = datetime.now(timezone.utc)
-        ticket.close_reason = ticket.close_reason or "marked_resolved"
-        if ticket.kind == "human":
-            await chat_repo.add_message(
-                session,
-                ticket.conversation_id,
-                "system",
-                "人工服务已结束，智能体继续为您服务。",
-            )
+    if status == "in_progress":
+        if ticket.status != "in_progress":
+            raise HandoffForbidden
+        return ticket
 
+    if status == "resolved" and ticket.status != "resolved":
+        business_status, close_reason = _resolution_labels(ticket)
+        ticket_feedback.mark_resolved(
+            ticket,
+            resolved_by_id=admin.id if admin is not None else ticket.assignee_id,
+            business_status=business_status,
+            close_reason=close_reason,
+            resolution_note=ticket.resolution_note,
+        )
+        if ticket.kind == "human":
+            await ticket_feedback.add_final_feedback(session, ticket)
+
+    await session.flush()
     return await handoff_repo.update_status(session, ticket, status)
 
 
@@ -695,5 +869,14 @@ async def reply_and_return_to_agent(
         "admin",
         content,
     )
+    if ticket.status != "resolved":
+        ticket_feedback.mark_resolved(
+            ticket,
+            resolved_by_id=ticket.assignee_id,
+            close_reason="replied_and_returned",
+        )
+        if ticket.kind == "human":
+            await ticket_feedback.add_final_feedback(session, ticket)
+    await session.flush()
     await handoff_repo.update_status(session, ticket, "resolved")
     return message, ticket

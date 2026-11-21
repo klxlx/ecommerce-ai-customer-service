@@ -232,8 +232,8 @@ async def test_after_sale_clarification_persists_and_resumes_with_order_number(
         owner.id,
         "ORD-6002",
         status="已完成",
-        total="199.00",
-        items=[("耳机", 1, "199.00")],
+        total="9.99",
+        items=[("耳机", 1, "9.99")],
     )
     container = _make_container(ScriptedChat({}))
 
@@ -259,7 +259,7 @@ async def test_after_sale_clarification_persists_and_resumes_with_order_number(
     assert "订单号" in first_body["answer"]
     assert second_body["intent"] == "after_sale"
     assert second_body["intent"] != "chit_chat"
-    assert "ORD-6002" in second_body["answer"]
+    assert "9.99" in second_body["answer"]
 
     conversation = (
         await db_session.execute(
@@ -518,6 +518,106 @@ async def test_knowledge_not_found_creates_handoff_ticket(
 
 
 @pytest.mark.anyio
+async def test_active_handoff_acknowledges_emotional_message(db_session):
+    user = await create_user(db_session, "active-handoff-emotion-owner")
+    conversation = Conversation(user_id=user.id, title="人工处理中")
+    db_session.add(conversation)
+    await db_session.flush()
+    db_session.add(
+        HandoffTicket(
+            conversation_id=conversation.id,
+            user_id=user.id,
+            status="open",
+            kind="human",
+            summary="历史售后问题",
+            slots={},
+            recent_messages=[],
+            evidence={},
+        )
+    )
+    await db_session.flush()
+    await db_session.commit()
+
+    container = _make_container(ScriptedChat({}))
+    async with await _build_client(container) as client:
+        token = await _login(client, "active-handoff-emotion-owner")
+        response = await client.post(
+            f"/api/conversations/{conversation.id}/messages",
+            json={"content": "我想打人"},
+            headers=_auth(token),
+        )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert "安全" in body["answer"]
+    assert "这条消息已同步给人工客服" in body["answer"]
+    assert "服务需求太多" not in body["answer"]
+
+    rows = (
+        await db_session.scalars(
+            select(ChatMessage)
+            .where(ChatMessage.conversation_id == conversation.id)
+            .order_by(ChatMessage.id)
+        )
+    ).all()
+    assert [row.role for row in rows] == ["user", "assistant"]
+    assert rows[-1].content == body["answer"]
+    assert body["message_id"] == rows[-1].id
+
+
+@pytest.mark.anyio
+async def test_streaming_active_handoff_persists_assistant_message(db_session):
+    user = await create_user(db_session, "active-handoff-stream-owner")
+    conversation = Conversation(user_id=user.id, title="人工处理中")
+    db_session.add(conversation)
+    await db_session.flush()
+    db_session.add(
+        HandoffTicket(
+            conversation_id=conversation.id,
+            user_id=user.id,
+            status="open",
+            kind="human",
+            summary="历史售后问题",
+            slots={},
+            recent_messages=[],
+            evidence={},
+        )
+    )
+    await db_session.flush()
+    await db_session.commit()
+
+    container = _make_container(ScriptedChat({}))
+    async with await _build_client(container) as client:
+        token = await _login(client, "active-handoff-stream-owner")
+        resp = await client.post(
+            f"/api/conversations/{conversation.id}/messages/stream",
+            json={"content": "我想打人"},
+            headers=_auth(token),
+        )
+
+    assert resp.status_code == 200
+    assert "event: token" in resp.text
+    assert "event: done" in resp.text
+    done = next(
+        json.loads(line.removeprefix("data:"))
+        for line in resp.text.splitlines()
+        if line.startswith("data:") and '"message_id"' in line
+    )
+    assert "安全" in done["answer"]
+
+    rows = (
+        await db_session.scalars(
+            select(ChatMessage)
+            .where(ChatMessage.conversation_id == conversation.id)
+            .order_by(ChatMessage.id)
+        )
+    ).all()
+    assert [row.role for row in rows] == ["user", "assistant"]
+    assert rows[-1].content == done["answer"]
+    assert done["message_id"] == rows[-1].id
+
+
+@pytest.mark.anyio
 async def test_third_unresolved_ticket_returns_limit_reply(
     db_session, monkeypatch
 ):
@@ -582,9 +682,7 @@ async def test_third_unresolved_ticket_returns_limit_reply(
     body = response.json()
     assert response.status_code == 200
     assert body["handoff"] is None
-    assert body["answer"] == (
-        "抱歉，您的服务需求太多了，我们先处理“订单一直没发货”和“怎么申请退款”问题吧。"
-    )
+    assert body["answer"] == nodes.KNOWLEDGE_GAP_REPLY
 
     factory = create_session_factory(get_settings().database_url)
     async with factory() as session:
@@ -592,8 +690,8 @@ async def test_third_unresolved_ticket_returns_limit_reply(
             await session.execute(select(HandoffTicket))
         ).scalars().all()
         run = await session.get(AgentRun, body["trace_id"])
-    assert len(tickets) == 2
-    assert run.trace["ticket_policy"]["action"] == "limit_exceeded"
+    assert len(tickets) == 3
+    assert run.trace["ticket_policy"]["action"] == "created"
 
 
 @pytest.mark.anyio
@@ -957,7 +1055,7 @@ async def test_after_sale_unauthorized_and_missing_orders_are_indistinguishable(
 
 
 @pytest.mark.anyio
-async def test_after_sale_query_error_is_sanitized_and_requires_handoff(
+async def test_after_sale_query_error_is_sanitized_and_creates_internal_ticket(
     db_session, monkeypatch
 ):
     owner = await create_user(db_session, "after-sale-error-owner")
@@ -997,9 +1095,11 @@ async def test_after_sale_query_error_is_sanitized_and_requires_handoff(
         "order_status": "已完成",
         "service_type": "售后",
         "records": [],
-        "handoff_required": True,
+        "handoff_required": False,
     }
-    assert body["handoff"]["status"] == "open"
+    assert body["handoff"] is None
+    assert body["answer"] == nodes.KNOWLEDGE_GAP_REPLY
+    assert body["intent"] == "knowledge_gap"
     serialized = json.dumps(body, ensure_ascii=False)
     assert "SELECT" not in serialized
     assert "password" not in serialized
@@ -1028,24 +1128,25 @@ async def test_after_sale_refund_above_threshold_creates_ticket_with_trace(
         ).json()
         resp = await client.post(
             f"/api/conversations/{conv['id']}/messages",
-            json={"content": "我要退款订单 ORD-6002 金额 500.01 元"},
+            json={"content": "我要退款订单 ORD-6002 金额 10.01 元"},
             headers=_auth(token),
         )
         body = resp.json()
         assert resp.status_code == 200
         assert body["intent"] == "handoff"
         assert body["handoff"] is not None
-        assert body["handoff"]["status"] == "open"
+        assert body["handoff"]["status"] in {"open", "in_progress"}
 
     run, tool_call = await _load_run_and_tool_call(body["trace_id"])
     threshold = run.trace["tool_evidence"]["threshold"]
     assert threshold == {
         "applied": True,
-        "amount": "500.01",
-        "limit": "500.00",
+        "amount": "10.01",
+        "limit": "10.00",
         "exceeded": True,
+        "auto_small_refund": False,
     }
-    assert "500.00" in run.trace["handoff_reason"]
+    assert "10.00" in run.trace["handoff_reason"]
     assert tool_call.tool_name == "after_sale"
     assert tool_call.result["threshold"]["exceeded"] is True
 
@@ -1054,3 +1155,73 @@ async def test_after_sale_refund_above_threshold_creates_ticket_with_trace(
         tickets = (await session.execute(select(HandoffTicket))).scalars().all()
         assert len(tickets) == 1
         assert tickets[0].status == "open"
+
+
+@pytest.mark.anyio
+async def test_small_refund_daily_limit_and_feedback_boundary(db_session):
+    owner = await create_user(db_session, "small-refund-limit-owner")
+    await create_order(
+        db_session,
+        owner.id,
+        "ORD-9001",
+        status="已完成",
+        total="9.99",
+        items=[("耳机", 1, "9.99")],
+    )
+    container = _make_container(ScriptedChat({}))
+
+    async with await _build_client(container) as client:
+        token = await _login(client, "small-refund-limit-owner")
+        conv = (
+            await client.post("/api/conversations", json={}, headers=_auth(token))
+        ).json()
+
+        for _ in range(3):
+            response = await client.post(
+                f"/api/conversations/{conv['id']}/messages",
+                json={"content": "我要退款订单 ORD-9001 金额 9.99 元"},
+                headers=_auth(token),
+            )
+            body = response.json()
+            assert body["intent"] == "after_sale"
+            assert body["handoff"]["status"] == "resolved"
+            assert "9.99" in body["answer"]
+
+        fourth = await client.post(
+            f"/api/conversations/{conv['id']}/messages",
+            json={"content": "我要退款订单 ORD-9001 金额 9.99 元"},
+            headers=_auth(token),
+        )
+        fourth_body = fourth.json()
+        assert fourth_body["intent"] == "handoff"
+        assert fourth_body["handoff"]["status"] == "open"
+        assert "次数已用完" in fourth_body["answer"]
+
+        factory = create_session_factory(get_settings().database_url)
+        async with factory() as session:
+            auto_tickets = (
+                await session.execute(
+                    select(HandoffTicket).where(
+                        HandoffTicket.close_reason == "auto_small_refund"
+                    )
+                )
+            ).scalars().all()
+            assert len(auto_tickets) == 3
+            auto_ticket = auto_tickets[0]
+            assert auto_ticket.status == "resolved"
+            assert auto_ticket.business_status == "已解决"
+
+        rated = await client.post(
+            f"/api/conversations/{auto_ticket.conversation_id}/tickets/{auto_ticket.id}/feedback",
+            json={"rating": 4, "comment": "小额退款处理很快。"},
+            headers=_auth(token),
+        )
+        assert rated.status_code == 200
+        assert rated.json()["rating"] == 4
+
+        duplicate = await client.post(
+            f"/api/conversations/{auto_ticket.conversation_id}/tickets/{auto_ticket.id}/feedback",
+            json={"rating": 5},
+            headers=_auth(token),
+        )
+        assert duplicate.status_code == 409

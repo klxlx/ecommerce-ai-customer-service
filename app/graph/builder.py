@@ -29,6 +29,7 @@ def build_graph(container: Container):
     graph.add_node("order", nodes.order_node)
     graph.add_node("after_sale", nodes.after_sale_node)
     graph.add_node("chitchat", nodes.chitchat_node)
+    graph.add_node("deescalation", nodes.deescalation_node)
     graph.add_node("clarification", nodes.clarification_node)
     graph.add_node("handoff", nodes.handoff_node)
 
@@ -44,6 +45,7 @@ def build_graph(container: Container):
             "order": "order",
             "after_sale": "after_sale",
             "chit_chat": "chitchat",
+            "deescalation": "deescalation",
             "clarification": "clarification",
             "handoff": "handoff",
         },
@@ -55,6 +57,7 @@ def build_graph(container: Container):
         "order",
         "after_sale",
         "chitchat",
+        "deescalation",
         "clarification",
         "handoff",
     ):

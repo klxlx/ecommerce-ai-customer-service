@@ -56,6 +56,7 @@ export interface HandoffEvidence {
   sources?: unknown[];
   tool?: HandoffToolEvidence;
   return_request?: HandoffReturnEvidence;
+  internal_kind?: "tool_failure" | "provider_failure" | string;
 }
 
 export interface HandoffTicket {
@@ -63,15 +64,22 @@ export interface HandoffTicket {
   conversation_id: number;
   user_id: number;
   status: "open" | "in_progress" | "resolved";
-  kind?: "human" | "knowledge_gap";
-  category?: "general" | "return_exchange";
+  kind?: "human" | "knowledge_gap" | "internal";
+  category?: "general" | "return_exchange" | "refund";
   summary: string;
   slots: Record<string, unknown>;
   recent_messages: { role: string; content: string }[];
   evidence: HandoffEvidence;
   assignee_id?: number | null;
+  assignee_name?: string;
   claimed_at?: string | null;
   resolved_at?: string | null;
+  resolved_by_id?: number | null;
+  resolved_by_name?: string;
+  business_status?: string;
+  rating?: number | null;
+  rating_comment?: string | null;
+  rated_at?: string | null;
   close_reason?: string;
   resolution_note?: string;
   created_at: string;
@@ -84,8 +92,8 @@ export interface HandoffLiveSession {
   user_id: number;
   username: string;
   status: "open" | "in_progress";
-  kind?: "human" | "knowledge_gap";
-  category?: "general" | "return_exchange";
+  kind?: "human" | "knowledge_gap" | "internal";
+  category?: "general" | "return_exchange" | "refund";
   assignee_id: number | null;
   assignee_name: string;
   summary: string;
@@ -289,10 +297,11 @@ export async function listHandoffMessages(
 export async function sendHandoffReply(
   id: number,
   content: string,
+  action?: "return_request",
 ): Promise<ChatMessage> {
   return apiFetch<ChatMessage>(`/api/admin/handoffs/${id}/messages`, {
     method: "POST",
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({ content, action }),
   });
 }
 

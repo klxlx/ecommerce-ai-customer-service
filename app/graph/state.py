@@ -13,6 +13,7 @@ INTENTS = Literal[
     "order",
     "after_sale",
     "chit_chat",
+    "deescalation",
     "clarification",
     "handoff",
     "knowledge_gap",

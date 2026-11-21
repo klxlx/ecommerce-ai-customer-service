@@ -65,9 +65,9 @@ async def test_provider_failure_returns_safe_answer_and_creates_ticket(db_sessio
 
     assert response.status_code == 200
     body = response.json()
-    assert body["intent"] == "handoff"
-    assert body["handoff"]["status"] == "open"
-    assert "人工客服" in body["answer"]
+    assert body["intent"] == "provider_failure"
+    assert body["handoff"] is None
+    assert "暂时繁忙" in body["answer"]
     serialized = json.dumps(body, ensure_ascii=False)
     assert "invalid api key" not in serialized
     assert "ProviderAuthenticationError" not in serialized
@@ -77,6 +77,7 @@ async def test_provider_failure_returns_safe_answer_and_creates_ticket(db_sessio
         tickets = (await session.execute(select(HandoffTicket))).scalars().all()
         runs = (await session.execute(select(AgentRun))).scalars().all()
         assert len(tickets) == 1
+        assert tickets[0].kind == "internal"
         assert len(runs) == 1
         assert runs[0].trace["tool_evidence"]["provider_failure"] == {
             "provider": "chat",

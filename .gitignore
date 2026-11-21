@@ -53,3 +53,12 @@ models/*.pt
 
 # Customer return photos are runtime data and may contain PII
 data/return_images/
+
+# Raw third-party datasets (~310MB; may contain PII). Only derived,
+# sanitized evaluation assets under data/eval belong in git.
+生成器/
+多场景数据集/
+售后维权数据集/
+物流查询数据集/
+多轮对话数据集/
+商品回复数据集/

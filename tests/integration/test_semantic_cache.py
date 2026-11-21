@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from app.api.deps import get_container
 from app.core.config import get_settings
-from app.db.models import SemanticCache
+from app.db.models import Conversation, SemanticCache
 from app.db.session import create_session_factory
 from app.graph.builder import Container
 from app.main import create_app
@@ -83,6 +83,9 @@ async def test_cache_hit_skips_graph_and_returns_curated_answer(db_session):
                 "/api/conversations", json={}, headers=_auth(token)
             )
         ).json()
+        stored = await db_session.get(Conversation, conversation["id"])
+        stored.chit_chat_streak = 2
+        await db_session.commit()
         response = await client.post(
             f"/api/conversations/{conversation['id']}/messages",
             json={"content": "七天无理由退货规则是什么？"},
@@ -91,10 +94,13 @@ async def test_cache_hit_skips_graph_and_returns_curated_answer(db_session):
         assert response.status_code == 200
         body = response.json()
         assert body["cached"] is True
-        assert body["answer"] == entry["answer"]
+        assert body["answer"].startswith("亲，您先别着急")
+        assert entry["answer"] in body["answer"]
         assert body["intent"] == "policy_knowledge"
 
     assert chat.calls == 0
+    await db_session.refresh(stored)
+    assert stored.chit_chat_streak == 0
     cache = (
         await db_session.execute(
             select(SemanticCache).where(SemanticCache.id == 1)

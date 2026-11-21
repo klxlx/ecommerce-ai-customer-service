@@ -20,6 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { useAuth } from "../../auth/AuthContext";
+import { ChatAvatar } from "../../components/ChatAvatar";
 import { MessageBubble } from "../../components/MessageBubble";
 import { ReturnRequestModal } from "./ReturnRequestModal";
 import {
@@ -475,14 +476,25 @@ function ChatPanel({
                 )}
                 {m.id === -2 ? (
                   <div className="message assistant">
-                    <div className="message-bubble">
-                      {m.content}
-                      <span className="stream-cursor" aria-hidden="true" />
+                    <ChatAvatar role="assistant" />
+                    <div
+                      className={`message-bubble${m.content ? "" : " message-bubble-pending"}`}
+                    >
+                      {m.content ? (
+                        m.content
+                      ) : (
+                        <span
+                          className="stream-spinner"
+                          role="status"
+                          aria-label="AI 客服正在回复"
+                        />
+                      )}
                     </div>
                   </div>
                 ) : (
                   <MessageBubble
                     message={m}
+                    conversationId={conversationId ?? undefined}
                     onReturnRequest={() => setReturnOpen(true)}
                   />
                 )}

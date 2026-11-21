@@ -42,8 +42,22 @@ export interface AfterSaleContext {
 
 export interface ChatAction {
   type: string;
-  label: string;
+  label?: string;
   description?: string;
+  ticket_id?: number;
+  can_rate?: boolean;
+  rated?: boolean;
+  rating?: number | null;
+  comment?: string | null;
+}
+
+export interface TicketFeedbackResult {
+  ticket_id: number;
+  can_rate: boolean;
+  rated: boolean;
+  rating: number | null;
+  comment: string | null;
+  rated_at: string | null;
 }
 
 export interface ChatMessage {
@@ -94,6 +108,17 @@ export async function listMessages(
 ): Promise<ChatMessage[]> {
   return apiFetch<ChatMessage[]>(
     `/api/conversations/${conversationId}/messages`,
+  );
+}
+
+export async function submitTicketFeedback(
+  conversationId: number,
+  ticketId: number,
+  payload: { rating?: number | null; comment?: string | null },
+): Promise<TicketFeedbackResult> {
+  return apiFetch<TicketFeedbackResult>(
+    `/api/conversations/${conversationId}/tickets/${ticketId}/feedback`,
+    { method: "POST", body: JSON.stringify(payload) },
   );
 }
 

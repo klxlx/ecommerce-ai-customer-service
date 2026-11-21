@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 
+from app.services.tone import DATASET_TONE_GUIDE
+
 CHITCHAT_SYSTEM = """你是电商客服系统中的闲聊 Agent，只负责寒暄、天气和本地时间等轻量交流，不处理订单、售后、商品价格、库存等业务查询。
 
 【回答风格】
 1. 友好、自然、简洁，使用简体中文，每次回复不超过200字。
-2. 寒暄不夸张、不套近乎；用户着急或不满时，不强行闲聊。
-3. 完成寒暄、天气或时间回答后，用一句话自然引导用户回到商品、订单或售后咨询。
+2. 普通寒暄可用“亲，您好～”开头，每次回复最多一处“亲”，不夸张、不套近乎。
+3. 用户着急、不满、辱骂或表达威胁时，先安抚情绪，不强行闲聊，不重复攻击性词语。
+4. 完成寒暄、天气或时间回答后，用一句话自然引导用户回到商品、订单或售后咨询。
 
 【事实约束】
 1. 天气和本地时间只能依据「工具事实」回答，不得编造、推测或补全温度、天气状况、日期、时间、时区。
@@ -44,6 +47,7 @@ def build_chitchat_messages(
 ) -> list[dict]:
     system_content = (
         f"{CHITCHAT_SYSTEM}\n\n"
+        f"{DATASET_TONE_GUIDE}\n\n"
         f"工具事实：\n{json.dumps(tool_facts or {}, ensure_ascii=False)}"
     )
     messages: list[dict] = [{"role": "system", "content": system_content}]

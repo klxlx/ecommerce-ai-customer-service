@@ -191,6 +191,7 @@ async def test_third_distinct_unresolved_ticket_is_limited(db_session):
         user_id=user.id,
         conversation_id=conversation.id,
         summary="怎么申请退款",
+        kind="human",
     )
 
     with pytest.raises(handoff_service.HandoffLimitExceeded) as exc_info:
@@ -209,7 +210,14 @@ async def test_third_distinct_unresolved_ticket_is_limited(db_session):
     tickets = exc_info.value.tickets
     assert len(tickets) == 2
     reply = handoff_service.ticket_limit_reply(tickets)
-    assert reply == "抱歉，您的服务需求太多了，我们先处理“订单一直没发货”和“怎么申请退款”问题吧。"
+    assert reply == (
+        "抱歉让您久等了。您之前反馈的“订单一直没发货”和“怎么申请退款”"
+        "还在处理中，我已把您现在的问题一起记下，会优先为您跟进。"
+    )
+    emotional = handoff_service.ticket_limit_reply(
+        tickets, message="你们到底什么时候处理，气死我了"
+    )
+    assert "您的心情我理解" in emotional
 
 
 @pytest.mark.anyio
