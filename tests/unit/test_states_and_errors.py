@@ -10,6 +10,7 @@ from app.core.errors import (
     ProviderAuthenticationError,
     ProviderConnectionError,
     ProviderInvalidRequestError,
+    ProviderQuotaExceededError,
     ProviderRateLimitError,
     map_httpx_error,
 )
@@ -52,6 +53,27 @@ def test_http_status_errors_map_to_retry_policy(
 
     assert isinstance(mapped, expected_type)
     assert mapped.retryable is retryable
+
+
+def test_dashscope_403_quota_is_not_reported_as_bad_api_key():
+    request = httpx.Request("POST", "https://dashscope.example/api")
+    response = httpx.Response(
+        403,
+        request=request,
+        json={
+            "code": "AllocationQuota.FreeTierOnly",
+            "message": "Free quota exhausted.",
+        },
+    )
+    error = httpx.HTTPStatusError(
+        "quota exhausted", request=request, response=response
+    )
+
+    mapped = map_httpx_error("embedding", error)
+
+    assert isinstance(mapped, ProviderQuotaExceededError)
+    assert mapped.category == "quota_exceeded"
+    assert mapped.retryable is False
 
 
 def test_network_errors_are_retryable_provider_errors():

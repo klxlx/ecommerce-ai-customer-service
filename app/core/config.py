@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     # DashScope native embedding / rerank
     dashscope_api_key: str = Field(default="", validation_alias="DASHSCOPE_API_KEY")
     embedding_model: str = Field(
-        default="text-embedding-v3", validation_alias="EMBEDDING_MODEL"
+        default="text-embedding-v4", validation_alias="EMBEDDING_MODEL"
     )
     embedding_dimension: int = Field(
         default=1024, validation_alias="EMBEDDING_DIMENSION"
