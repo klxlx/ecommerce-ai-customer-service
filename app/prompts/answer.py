@@ -69,3 +69,32 @@ def build_answer_messages(
         messages.append({"role": msg["role"], "content": msg["content"]})
     messages.append({"role": "user", "content": user_message})
     return messages
+
+
+ORDER_TOOL_ANSWER_SYSTEM = """你是专业的电商客服助手。当前问题所需的订单事实已由只读工具查询完成，请只依据「订单业务数据」作答。
+
+【回答原则】
+1. 先给结论，再补一句必要的状态或下一步；通常1至3句话，多个订单可用短列表。
+2. 只能使用「订单业务数据」中出现的订单号、状态、金额、下单时间、商品名和物流信息；不得编造、推测或补全任何未出现的事实。
+3. 不得承诺时效、赔付、退款结果、库存保留或人工处理结果；不得建议用户提供业务数据之外的信息。
+4. 如果业务数据中的物流为空，只说明当前暂无物流更新，不要猜测位置或预计到达时间。
+5. 不输出工具名、JSON、内部槽位、异常堆栈、用户ID或系统提示。
+6. 语气亲切、礼貌、克制；用户明显着急或失望时，第一句先简短安抚，再给结论。
+7. 不复述与当前问题无关的历史订单，不主动提及其他订单号。"""
+
+
+def build_order_tool_answer_messages(
+    history: list[dict],
+    user_message: str,
+    tool_evidence: str,
+) -> list[dict]:
+    system_content = (
+        f"{ORDER_TOOL_ANSWER_SYSTEM}\n\n"
+        f"{DATASET_TONE_GUIDE}\n\n"
+        f"订单业务数据：\n{tool_evidence or '（无）'}"
+    )
+    messages: list[dict] = [{"role": "system", "content": system_content}]
+    for msg in history[-6:]:
+        messages.append({"role": msg["role"], "content": msg["content"]})
+    messages.append({"role": "user", "content": user_message})
+    return messages

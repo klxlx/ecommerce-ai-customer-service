@@ -31,6 +31,7 @@ class AgentState(TypedDict, total=False):
     slots: dict[str, Any]
     sources: list[dict[str, Any]]
     tool_evidence: dict[str, Any]
+    fc: dict[str, Any]
     grounding_context: str
     after_sale_context: dict[str, Any] | None
     chit_chat_streak: int

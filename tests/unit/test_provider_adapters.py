@@ -77,6 +77,50 @@ def _chat_completion(
     )
 
 
+def _chat_tool_completion(
+    *,
+    request: httpx.Request | None = None,
+    call_id: str = "call_1",
+    name: str = "order_detail",
+    arguments: str = '{"order_no": "ORD-5001"}',
+) -> httpx.Response:
+    return httpx.Response(
+        200,
+        request=request,
+        json={
+            "id": "chatcmpl-tool-test",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "test-chat",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": call_id,
+                                "type": "function",
+                                "function": {
+                                    "name": name,
+                                    "arguments": arguments,
+                                },
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 1,
+                "completion_tokens": 1,
+                "total_tokens": 2,
+            },
+        },
+    )
+
+
 @pytest.mark.anyio
 async def test_chat_without_api_key_fails_before_using_placeholder_client(
     monkeypatch,
@@ -395,3 +439,46 @@ async def test_rerank_maps_invalid_request_without_retry():
     assert snapshot["counters"]["provider.degraded.total"][
         "provider=rerank,reason=invalid_request"
     ] == 1
+
+
+@pytest.mark.anyio
+async def test_chat_complete_with_tools_parses_arguments_and_sends_schema():
+    request_payload: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_payload.update(json.loads(request.content))
+        return _chat_tool_completion(request=request)
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "order_detail",
+                "description": "查订单",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"order_no": {"type": "string"}},
+                    "required": ["order_no"],
+                },
+            },
+        }
+    ]
+    client = _chat_client(handler)
+    provider = OpenAICompatChat(_settings(), client=client)
+    try:
+        response = await provider.complete_with_tools(
+            [{"role": "user", "content": "查 ORD-5001"}],
+            tools,
+            model="qwen-turbo",
+        )
+    finally:
+        await client.close()
+
+    assert request_payload["tools"] == tools
+    assert request_payload["tool_choice"] == "auto"
+    assert request_payload["model"] == "qwen-turbo"
+    assert response.content == ""
+    assert response.finish_reason == "tool_calls"
+    assert response.tool_calls[0].id == "call_1"
+    assert response.tool_calls[0].name == "order_detail"
+    assert response.tool_calls[0].arguments == {"order_no": "ORD-5001"}

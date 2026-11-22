@@ -1,0 +1,35 @@
+[
+  {"id": "list-01", "message": "我的订单有哪些", "history": [], "slots": {}, "expected": {"tool": "order_list", "arguments": {}}},
+  {"id": "list-02", "message": "查一下我的全部订单", "history": [], "slots": {}, "expected": {"tool": "order_list", "arguments": {}}},
+  {"id": "list-03", "message": "我下过哪些订单", "history": [], "slots": {}, "expected": {"tool": "order_list", "arguments": {}}},
+  {"id": "list-04", "message": "订单列表", "history": [], "slots": {}, "expected": {"tool": "order_list", "arguments": {}}},
+  {"id": "list-05", "message": "所有订单", "history": [], "slots": {}, "expected": {"tool": "order_list", "arguments": {}}},
+  {"id": "list-06", "message": "我有哪些订单", "history": [], "slots": {}, "expected": {"tool": "order_list", "arguments": {}}},
+  {"id": "list-07", "message": "看看我的订单", "history": [], "slots": {}, "expected": {"tool": "order_list", "arguments": {}}},
+  {"id": "list-08", "message": "我的订单清单", "history": [], "slots": {}, "expected": {"tool": "order_list", "arguments": {}}},
+  {"id": "list-09", "message": "查所有订单", "history": [], "slots": {}, "expected": {"tool": "order_list", "arguments": {}}},
+  {"id": "list-10", "message": "我的订单都有什么", "history": [], "slots": {}, "expected": {"tool": "order_list", "arguments": {}}},
+
+  {"id": "detail-01", "message": "查订单 ORD-8001", "history": [], "slots": {}, "expected": {"tool": "order_detail", "arguments": {"order_no": "ORD-8001"}}},
+  {"id": "detail-02", "message": "ORD-8002 到哪了", "history": [], "slots": {}, "expected": {"tool": "order_detail", "arguments": {"order_no": "ORD-8002"}}},
+  {"id": "detail-03", "message": "物流 ORD-8003", "history": [], "slots": {}, "expected": {"tool": "order_detail", "arguments": {"order_no": "ORD-8003"}}},
+  {"id": "detail-04", "message": "帮我看下 ORD-8004", "history": [], "slots": {}, "expected": {"tool": "order_detail", "arguments": {"order_no": "ORD-8004"}}},
+  {"id": "detail-05", "message": "订单 ORD-8005 的状态", "history": [], "slots": {}, "expected": {"tool": "order_detail", "arguments": {"order_no": "ORD-8005"}}},
+  {"id": "detail-06", "message": "ORD-8006", "history": [], "slots": {}, "expected": {"tool": "order_detail", "arguments": {"order_no": "ORD-8006"}}},
+  {"id": "detail-07", "message": "查一下 ORD-8007 的物流", "history": [], "slots": {}, "expected": {"tool": "order_detail", "arguments": {"order_no": "ORD-8007"}}},
+  {"id": "detail-08", "message": "我的订单 ORD-8008 到哪了", "history": [], "slots": {}, "expected": {"tool": "order_detail", "arguments": {"order_no": "ORD-8008"}}},
+  {"id": "detail-09", "message": "麻烦查 ORD-8009", "history": [], "slots": {}, "expected": {"tool": "order_detail", "arguments": {"order_no": "ORD-8009"}}},
+  {"id": "detail-10", "message": "订单号 ORD-8010 物流到哪了", "history": [], "slots": {}, "expected": {"tool": "order_detail", "arguments": {"order_no": "ORD-8010"}}},
+
+  {"id": "none-01", "message": "我的快递到哪了", "history": [], "slots": {}, "expected": {"tool": null}},
+  {"id": "none-02", "message": "订单有问题", "history": [], "slots": {}, "expected": {"tool": null}},
+  {"id": "none-03", "message": "查一下订单", "history": [], "slots": {}, "expected": {"tool": null}},
+  {"id": "none-04", "message": "我的包裹呢", "history": [], "slots": {}, "expected": {"tool": null}},
+  {"id": "none-05", "message": "物流怎么还没更新", "history": [], "slots": {}, "expected": {"tool": null}},
+  {"id": "none-06", "message": "帮我查订单状态", "history": [], "slots": {}, "expected": {"tool": null}},
+  {"id": "none-07", "message": "这个订单怎么样了", "history": [], "slots": {}, "expected": {"tool": null}},
+
+  {"id": "write-01", "message": "我要退款 ORD-8011", "history": [], "slots": {}, "expected": {"tool": null}},
+  {"id": "write-02", "message": "取消订单 ORD-8012", "history": [], "slots": {}, "expected": {"tool": null}},
+  {"id": "write-03", "message": "改地址 ORD-8013", "history": [], "slots": {}, "expected": {"tool": null}}
+]

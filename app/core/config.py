@@ -195,6 +195,20 @@ class Settings(BaseSettings):
         default=True, validation_alias="STREAM_PARTIAL_FALLBACK_ENABLED"
     )
 
+    # Read-only Function Calling pilot. Disabled by default; the deterministic
+    # graph remains the fallback path when the flag is off or the plan fails.
+    fc_readonly_enabled: bool = Field(
+        default=False, validation_alias="FC_READONLY_ENABLED"
+    )
+    fc_max_steps: int = Field(default=2, validation_alias="FC_MAX_STEPS")
+    fc_allowed_tools: str = Field(
+        default="order_list,order_detail",
+        validation_alias="FC_ALLOWED_TOOLS",
+    )
+    fc_planner_model: str = Field(
+        default="", validation_alias="FC_PLANNER_MODEL"
+    )
+
     # App
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     mock_providers: bool = Field(default=False, validation_alias="MOCK_PROVIDERS")
@@ -213,6 +227,11 @@ class Settings(BaseSettings):
     def sentinel_model_name(self) -> str:
         """The sentinel uses the router tier unless explicitly overridden."""
         return self.sentinel_model or self.router_model
+
+    @property
+    def fc_planner_model_name(self) -> str:
+        """Use the router tier for cheap tool planning unless overridden."""
+        return self.fc_planner_model or self.router_model
 
 
 @lru_cache

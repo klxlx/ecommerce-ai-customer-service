@@ -8,6 +8,7 @@ deterministic templates built on SQL tool results, never from the LLM.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from decimal import Decimal, InvalidOperation
 
@@ -28,8 +29,14 @@ from app.graph.state import (
     MAX_CLARIFICATION_ATTEMPTS,
     AgentState,
 )
-from app.prompts.answer import KNOWLEDGE_GAP_MARKER, build_answer_messages
+from app.graph.tool_planner import run_order_tool_loop
+from app.prompts.answer import (
+    KNOWLEDGE_GAP_MARKER,
+    build_answer_messages,
+    build_order_tool_answer_messages,
+)
 from app.prompts.chitchat import build_chitchat_messages
+from app.prompts.tool_planner import build_tool_planner_messages
 from app.schemas.after_sales import AfterSaleFact
 from app.schemas.catalog import AmbiguousProduct, ProductFact
 from app.schemas.orders import OrderFact
@@ -681,6 +688,82 @@ async def order_node(state: AgentState) -> dict:
     # Missing and unauthorized orders return the same non-enumerating message.
     return {
         "answer": "抱歉，未查询到该订单，请核对订单号后重试。",
+    }
+
+
+async def order_fc_node(state: AgentState) -> dict:
+    """Read-only Function Calling pilot with deterministic fallback.
+
+    The planner may only choose an allowlisted order tool and fill ``order_no``.
+    ``user_id`` never comes from model output. Any planning error, non-ok tool
+    result, empty list, or empty answer falls back to the existing order node.
+    """
+    settings = state.get("settings")
+    if not settings or not getattr(settings, "fc_readonly_enabled", False):
+        return await order_node(state)
+
+    planner_messages = build_tool_planner_messages(
+        state.get("history", []),
+        state.get("user_message", ""),
+        slots=state.get("slots", {}),
+    )
+    try:
+        plan = await run_order_tool_loop(
+            chat=state["chat"],
+            settings=settings,
+            messages=planner_messages,
+            session=state["session"],
+            user_id=state["user_id"],
+            metrics=state.get("metrics"),
+        )
+    except Exception:
+        result = await order_node(state)
+        result["fc"] = {
+            "enabled": True,
+            "steps": 0,
+            "fallback_reason": "planner_error",
+            "tool_calls": [],
+        }
+        return result
+
+    empty_list = plan.evidence.get("orders") == []
+    if plan.fallback_reason or not plan.evidence or empty_list:
+        result = await order_node(state)
+        result["fc"] = plan.trace()
+        return result
+
+    evidence_text = json.dumps(
+        plan.evidence, ensure_ascii=False, default=str
+    )
+    answer_messages = build_order_tool_answer_messages(
+        state.get("history", []),
+        state.get("user_message", ""),
+        evidence_text,
+    )
+    knowledge_agent = getattr(state.get("agents"), "knowledge", None)
+    answer_model = getattr(knowledge_agent, "model", None)
+    try:
+        answer = await _complete_answer(
+            state,
+            answer_messages,
+            model=answer_model,
+        )
+    except ProviderError:
+        result = await order_node(state)
+        result["fc"] = plan.trace()
+        return result
+
+    answer = (answer or "").strip()
+    if not answer or KNOWLEDGE_GAP_MARKER in answer:
+        result = await order_node(state)
+        result["fc"] = plan.trace()
+        return result
+
+    return {
+        "intent": "order",
+        "answer": answer,
+        "tool_evidence": plan.evidence,
+        "fc": plan.trace(),
     }
 
 

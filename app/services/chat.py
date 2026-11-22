@@ -512,6 +512,7 @@ async def _persist_result(
         "knowledge_gap": is_knowledge_gap and not limit_exceeded,
         "ticket_policy": ticket_policy,
         "sentinel": result.get("sentinel"),
+        "fc": result.get("fc"),
     }
     agent_run = await chat_repo.create_agent_run(session, conversation.id, intent, trace)
     await chat_repo.create_tool_call_log(
