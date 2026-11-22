@@ -196,6 +196,8 @@ async def run_chat(
         "weather": container.weather,
         "local_time": container.local_time,
         "stream": token_sink,
+        "settings": container.settings,
+        "metrics": metrics,
     }
 
     graph = build_graph(container)

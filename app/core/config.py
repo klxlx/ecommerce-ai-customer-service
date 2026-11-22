@@ -186,6 +186,14 @@ class Settings(BaseSettings):
     rerank_total_budget_seconds: float = Field(
         default=30.0, validation_alias="RERANK_TOTAL_BUDGET_SECONDS"
     )
+    # P0 stream resilience. Both flags default on; disable per environment if a
+    # provider's stream semantics turn out to be incompatible with retries.
+    stream_retry_enabled: bool = Field(
+        default=True, validation_alias="STREAM_RETRY_ENABLED"
+    )
+    stream_partial_fallback_enabled: bool = Field(
+        default=True, validation_alias="STREAM_PARTIAL_FALLBACK_ENABLED"
+    )
 
     # App
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")

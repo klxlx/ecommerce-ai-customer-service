@@ -84,6 +84,11 @@ class OpenAICompatChat:
             client is not None and bool(client_key)
         )
 
+    @property
+    def stream_policy(self) -> ResiliencePolicy:
+        """Expose the same bounded retry policy used by completions."""
+        return self._policy
+
     async def complete(
         self,
         messages: list[dict],

@@ -46,3 +46,5 @@ class AgentState(TypedDict, total=False):
     weather: Any
     local_time: Callable[[], dict[str, str]]
     stream: Callable[[str], Awaitable[None]] | None
+    settings: Any
+    metrics: Any

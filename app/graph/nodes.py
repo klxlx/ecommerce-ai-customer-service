@@ -11,6 +11,8 @@ import asyncio
 import re
 from decimal import Decimal, InvalidOperation
 
+from app.core.errors import ProviderError
+from app.core.resilience import ResiliencePolicy, execute_stream_with_resilience
 from app.graph.router import (
     extract_order_no,
     is_after_sale_progress_query,
@@ -141,19 +143,57 @@ async def _complete_answer(
     sink = state.get("stream")
     stream_factory = getattr(chat, "stream", None)
     if sink is not None and callable(stream_factory):
-        stream = stream_factory(messages, model=model)
+        settings = state.get("settings")
+        metrics = state.get("metrics")
+        retry_enabled = bool(getattr(settings, "stream_retry_enabled", True))
+        partial_fallback_enabled = bool(
+            getattr(settings, "stream_partial_fallback_enabled", True)
+        )
+
+        policy = getattr(chat, "stream_policy", None)
+        if not isinstance(policy, ResiliencePolicy):
+            if settings is not None:
+                policy = ResiliencePolicy(
+                    attempt_timeout_seconds=settings.chat_attempt_timeout_seconds,
+                    total_budget_seconds=settings.chat_total_budget_seconds,
+                    max_retries=settings.provider_max_retries,
+                    backoff_seconds=settings.provider_retry_backoff_seconds,
+                )
+            else:
+                policy = ResiliencePolicy(
+                    attempt_timeout_seconds=30.0,
+                    total_budget_seconds=60.0,
+                    max_retries=2,
+                    backoff_seconds=0.5,
+                )
+
+        visible_token_emitted = False
+        buffered: list[str] = []
+
+        if retry_enabled:
+            stream = execute_stream_with_resilience(
+                provider="chat",
+                stream_factory=lambda: stream_factory(messages, model=model),
+                policy=policy,
+                metrics=metrics,
+                should_stop_retry=lambda: visible_token_emitted,
+                on_retry=buffered.clear,
+            )
+        else:
+            stream = stream_factory(messages, model=model)
+
         try:
             if sentinel is not None:
-                parts: list[str] = []
                 async for delta in stream:
                     if delta:
-                        parts.append(delta)
-                answer = "".join(parts).strip()
+                        buffered.append(delta)
+                answer = "".join(buffered).strip()
                 if answer and sentinel not in answer:
                     if empathy_text:
                         answer = ensure_empathy(empathy_text, answer)
                     for start in range(0, len(answer), 12):
                         await sink(answer[start : start + 12])
+                        visible_token_emitted = True
                         await asyncio.sleep(0.01)
                 return answer
             else:
@@ -170,9 +210,50 @@ async def _complete_answer(
                     parts.append(delta)
                     total += len(delta)
                     await sink(delta)
+                    visible_token_emitted = True
                 answer = "".join(parts).strip()
                 if answer:
                     return answer
+        except ProviderError:
+            if not (retry_enabled and partial_fallback_enabled):
+                raise
+
+            # The original stream is never replayed after a visible token. A
+            # non-streaming completion produces one coherent answer; the SSE
+            # layer replaces the bubble when the text differs from what was
+            # already sent.
+            try:
+                if model:
+                    answer = (await chat.complete(messages, model=model)).strip()
+                else:
+                    answer = (await chat.complete(messages)).strip()
+            except ProviderError:
+                if metrics:
+                    metrics.increment(
+                        "provider.stream.fallback_complete.total",
+                        provider="chat",
+                        outcome="failure",
+                    )
+                raise
+
+            if metrics:
+                metrics.increment(
+                    "provider.stream.fallback_complete.total",
+                    provider="chat",
+                    outcome="success",
+                )
+            if not answer:
+                return answer
+            if sentinel is not None and sentinel in answer:
+                return answer
+            if empathy_text:
+                answer = ensure_empathy(empathy_text, answer)
+            if not visible_token_emitted:
+                for start in range(0, len(answer), 12):
+                    await sink(answer[start : start + 12])
+                    visible_token_emitted = True
+                    await asyncio.sleep(0.01)
+            return answer
         finally:
             close = getattr(stream, "aclose", None)
             if callable(close):
