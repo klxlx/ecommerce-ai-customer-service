@@ -10,7 +10,11 @@ from app.graph.state import AgentState
 
 
 def route_branch(state: AgentState) -> str:
-    return state.get("intent", "clarification")
+    intent = state.get("intent", "clarification")
+    settings = state.get("settings")
+    if intent == "order" and getattr(settings, "fc_readonly_enabled", False):
+        return "order_fc"
+    return intent
 
 
 def build_graph(container: Container):
@@ -27,6 +31,7 @@ def build_graph(container: Container):
     graph.add_node("knowledge", nodes.knowledge_node)
     graph.add_node("catalog", nodes.catalog_node)
     graph.add_node("order", nodes.order_node)
+    graph.add_node("order_fc", nodes.order_fc_node)
     graph.add_node("after_sale", nodes.after_sale_node)
     graph.add_node("chitchat", nodes.chitchat_node)
     graph.add_node("deescalation", nodes.deescalation_node)
@@ -43,6 +48,7 @@ def build_graph(container: Container):
             "policy_knowledge": "knowledge",
             "price_stock": "catalog",
             "order": "order",
+            "order_fc": "order_fc",
             "after_sale": "after_sale",
             "chit_chat": "chitchat",
             "deescalation": "deescalation",
@@ -55,6 +61,7 @@ def build_graph(container: Container):
         "knowledge",
         "catalog",
         "order",
+        "order_fc",
         "after_sale",
         "chitchat",
         "deescalation",

@@ -1,0 +1,529 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>电商客服智能体 · 系统流程与兜底现状</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #e9edf4; }
+  body {
+    font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans SC", "Segoe UI", sans-serif;
+    color: #14203a;
+    -webkit-font-smoothing: antialiased;
+  }
+  .page {
+    width: 1800px;
+    min-height: 1260px;
+    padding: 38px 48px 32px;
+    background:
+      radial-gradient(circle at 7% 0%, rgba(59,130,246,.12), transparent 28%),
+      radial-gradient(circle at 96% 8%, rgba(124,58,237,.10), transparent 26%),
+      linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%);
+  }
+  .top {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    padding-bottom: 20px;
+    border-bottom: 1px solid #d8e0eb;
+  }
+  .kicker {
+    font-size: 13px;
+    letter-spacing: 2.4px;
+    color: #64748b;
+    font-weight: 700;
+    margin-bottom: 8px;
+  }
+  h1 {
+    margin: 0;
+    font-size: 42px;
+    line-height: 1.12;
+    letter-spacing: -0.8px;
+    font-weight: 800;
+  }
+  .subtitle {
+    margin: 9px 0 0;
+    font-size: 17px;
+    color: #5b6b82;
+  }
+  .branch {
+    font-size: 14px;
+    color: #334155;
+    background: rgba(255,255,255,.72);
+    border: 1px solid #d7e0ec;
+    border-radius: 12px;
+    padding: 10px 14px;
+    box-shadow: 0 8px 24px rgba(15,23,42,.06);
+    white-space: nowrap;
+  }
+  .branch b { color: #2563eb; }
+  .layout {
+    display: grid;
+    grid-template-columns: 1fr 524px;
+    gap: 28px;
+    margin-top: 22px;
+    align-items: start;
+  }
+  .left-head {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin: 2px 0 14px;
+  }
+  .left-head .tag {
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 1.8px;
+    color: #2563eb;
+    background: #e7efff;
+    border: 1px solid #c8dbff;
+    border-radius: 6px;
+    padding: 5px 8px;
+  }
+  .left-head h2 {
+    margin: 0;
+    font-size: 23px;
+    letter-spacing: -.2px;
+  }
+  .left-head p {
+    margin: 0 0 0 auto;
+    font-size: 13px;
+    color: #718096;
+  }
+  .layers {
+    display: flex;
+    flex-direction: column;
+    gap: 11px;
+  }
+  .layer {
+    display: grid;
+    grid-template-columns: 94px 1fr;
+    min-height: 94px;
+    background: rgba(255,255,255,.92);
+    border: 1px solid #dbe3ee;
+    border-radius: 14px;
+    box-shadow: 0 8px 24px rgba(25,39,65,.055);
+    overflow: hidden;
+    position: relative;
+  }
+  .layer::before {
+    content: "";
+    position: absolute;
+    left: 92px;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: #e8edf5;
+  }
+  .layer-index {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 4px;
+    background: linear-gradient(180deg, rgba(248,250,252,.7), rgba(241,245,249,.9));
+  }
+  .layer-index .no {
+    font-size: 25px;
+    font-weight: 800;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .layer-index .en {
+    font-size: 8px;
+    letter-spacing: 1.3px;
+    color: #7b8aa0;
+    font-weight: 700;
+    text-align: center;
+    text-transform: uppercase;
+  }
+  .layer-main { padding: 13px 17px 13px 18px; }
+  .layer-title {
+    display: flex;
+    align-items: baseline;
+    gap: 9px;
+    margin-bottom: 8px;
+  }
+  .layer-title h3 {
+    margin: 0;
+    font-size: 19px;
+    letter-spacing: -.3px;
+  }
+  .layer-title span {
+    font-size: 12px;
+    color: #7b8aa0;
+  }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    font-size: 13px;
+    line-height: 1.45;
+    color: #334155;
+    background: #f7f9fc;
+    border: 1px solid #e1e8f1;
+    border-radius: 7px;
+    padding: 3px 8px;
+    white-space: nowrap;
+  }
+  .chip code {
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    font-size: 12px;
+    color: #1e40af;
+    background: transparent;
+  }
+  .chip.hot {
+    background: #fff7ed;
+    border-color: #fed7aa;
+    color: #9a3412;
+  }
+  .layer.display .no { color: #2563eb; }
+  .layer.entry .no { color: #0f8f8b; }
+  .layer.service .no { color: #7c3aed; }
+  .layer.graph .no { color: #d9467a; }
+  .layer.capability .no { color: #ea580c; }
+  .layer.data .no { color: #475569; }
+
+  .chain {
+    margin-top: 14px;
+    background: #0f1f3d;
+    border-radius: 14px;
+    padding: 14px 16px;
+    color: #dbeafe;
+    box-shadow: 0 12px 28px rgba(15,31,61,.18);
+  }
+  .chain-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .chain-head .label {
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 1.6px;
+    color: #93c5fd;
+  }
+  .chain-head .note {
+    font-size: 11px;
+    color: #94a3b8;
+  }
+  .steps {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+  .step {
+    font-size: 12px;
+    line-height: 1.35;
+    color: #f8fafc;
+    background: rgba(255,255,255,.10);
+    border: 1px solid rgba(147,197,253,.25);
+    border-radius: 7px;
+    padding: 5px 7px;
+    white-space: nowrap;
+  }
+  .arrow { color: #60a5fa; font-size: 13px; font-weight: 700; padding: 0 1px; }
+
+  .panel {
+    background: rgba(255,255,255,.90);
+    border: 1px solid #dbe3ee;
+     border-radius: 18px;
+    padding: 18px 18px 14px;
+    box-shadow: 0 14px 36px rgba(25,39,65,.08);
+  }
+  .panel-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid #e7edf5;
+  }
+  .panel-head h2 { margin: 0; font-size: 23px; letter-spacing: -.4px; }
+  .panel-head p { margin: 5px 0 0; font-size: 13px; color: #64748b; }
+  .stack-note {
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 1.2px;
+    color: #dc2626;
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    padding: 5px 7px;
+    border-radius: 6px;
+    white-space: nowrap;
+  }
+  .fb-card {
+    border: 1px solid #e2e8f0;
+    border-left: 5px solid #f59e0b;
+    border-radius: 12px;
+    padding: 12px 12px 11px;
+    margin-top: 12px;
+    background: #fff;
+  }
+  .fb-card.tool { border-left-color: #0f8f8b; }
+  .fb-card.break { border-left-color: #dc2626; background: #fffafa; }
+  .fb-head { display: flex; align-items: center; gap: 7px; margin-bottom: 7px; }
+  .fb-head h3 { margin: 0; font-size: 17px; letter-spacing: -.2px; }
+  .badge {
+    margin-left: auto;
+    font-size: 11px;
+    font-weight: 800;
+    border-radius: 999px;
+    padding: 3px 7px;
+    white-space: nowrap;
+  }
+  .badge.partial { color: #b45309; background: #fffbeb; border: 1px solid #fde68a; }
+  .badge.ok { color: #0f766e; background: #ecfdf5; border: 1px solid #a7f3d0; }
+  .badge.none { color: #b91c1c; background: #fef2f2; border: 1px solid #fecaca; }
+  .fb-sub {
+    margin: 0 0 7px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: #475569;
+  }
+  .fb-sub b { color: #0f172a; }
+  .fb-list { margin: 0; padding: 0; list-style: none; }
+  .fb-list li {
+    position: relative;
+    padding-left: 12px;
+    margin: 4px 0;
+    font-size: 12.5px;
+    line-height: 1.47;
+    color: #475569;
+  }
+  .fb-list li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 7px;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: #94a3b8;
+  }
+  .fb-list li.have::before { background: #10b981; }
+  .fb-list li.miss::before { background: #ef4444; }
+  .fb-list li.miss { color: #991b1b; }
+  .fb-list b { color: #0f172a; }
+  .fb-list code {
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    font-size: 11px;
+    color: #1e40af;
+  }
+  .panel-foot {
+    margin-top: 12px;
+    padding: 10px 11px;
+    border-radius: 10px;
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    font-size: 12px;
+    line-height: 1.55;
+    color: #475569;
+  }
+  .panel-foot b { color: #b91c1c; }
+  .foot {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 18px;
+    font-size: 11px;
+    color: #7b8aa0;
+  }
+  .foot strong { color: #475569; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="top">
+    <div>
+      <div class="kicker">SYSTEM MAP / CURRENT STATE</div>
+      <h1>电商客服智能体 · 系统流程与兜底现状</h1>
+      <p class="subtitle">六层架构与一条主链路；右侧只标注三类兜底的真实边界。</p>
+    </div>
+    <div class="branch">分支 <b>feat/system-optimization</b> · HEAD <b>cb179fe</b></div>
+  </div>
+
+  <div class="layout">
+    <main>
+      <div class="left-head">
+        <span class="tag">REQUEST PATH</span>
+        <h2>从顾客消息到持久化回复</h2>
+        <p>细小流程以文字带过，不在图中展开</p>
+      </div>
+
+      <div class="layers">
+        <div class="layer display">
+          <div class="layer-index"><div class="no">01</div><div class="en">Display</div></div>
+          <div class="layer-main">
+            <div class="layer-title"><h3>展示层</h3><span>顾客端 + 管理端</span></div>
+            <div class="chips">
+              <span class="chip">React SPA：聊天 / 退换货弹窗 / 工单工作台 / 知识库 / 日志</span>
+              <span class="chip">开发态 Vite <code>5173</code>，<code>/api</code> 代理到 <code>8000</code></span>
+              <span class="chip">生产态由 8000 托管 <code>frontend/dist</code></span>
+              <span class="chip">HTTP JSON + SSE：<code>token / replace / done / error</code></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="layer entry">
+          <div class="layer-index"><div class="no">02</div><div class="en">Entry</div></div>
+          <div class="layer-main">
+            <div class="layer-title"><h3>接入层</h3><span>FastAPI · 8000</span></div>
+            <div class="chips">
+              <span class="chip"><code>/api/auth</code> 登录 / JWT</span>
+              <span class="chip"><code>/api/conversations</code> 会话与消息</span>
+              <span class="chip"><code>/messages/stream</code> SSE</span>
+              <span class="chip"><code>/api/returns</code> 退换货</span>
+              <span class="chip"><code>/api/admin/handoffs</code> 工单</span>
+              <span class="chip"><code>/api/admin/knowledge</code> 知识</span>
+              <span class="chip"><code>/api/admin/logs</code> 日志</span>
+              <span class="chip"><code>/mcp/weather</code> 天气</span>
+              <span class="chip hot">限流 / CORS / <code>/health</code></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="layer service">
+          <div class="layer-index"><div class="no">03</div><div class="en">Service</div></div>
+          <div class="layer-main">
+            <div class="layer-title"><h3>服务层</h3><span>业务编排</span></div>
+            <div class="chips">
+              <span class="chip"><code>chat.py</code>：人工中检查 → 存 user → FAQ 缓存 → Graph → 哨兵 → 落库</span>
+              <span class="chip"><code>handoff.py</code> 工单与限额</span>
+              <span class="chip"><code>returns.py</code> 退换货</span>
+              <span class="chip"><code>semantic_cache.py</code> FAQ 语义缓存</span>
+              <span class="chip"><code>sentinel.py</code> 回答校验</span>
+              <span class="chip"><code>tone.py</code> 语气 / 安抚</span>
+              <span class="chip"><code>vision.py</code> YOLO 识别</span>
+              <span class="chip"><code>knowledge_*</code> 知识导入 / 管理</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="layer graph">
+          <div class="layer-index"><div class="no">04</div><div class="en">Graph</div></div>
+          <div class="layer-main">
+            <div class="layer-title"><h3>编排层</h3><span>LangGraph StateGraph</span></div>
+            <div class="chips">
+              <span class="chip hot"><code>route</code>：确定性 guard 优先，再走 LLM 路由</span>
+              <span class="chip">greeting / knowledge / catalog / order / after_sale</span>
+              <span class="chip">chitchat / deescalation / clarification / handoff</span>
+              <span class="chip">业务节点 → END；<code>clarification</code> 保存 pending slots，下轮续接</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="layer capability">
+          <div class="layer-index"><div class="no">05</div><div class="en">Capability</div></div>
+          <div class="layer-main">
+            <div class="layer-title"><h3>能力层</h3><span>tools · RAG · providers</span></div>
+            <div class="chips">
+              <span class="chip"><code>tools</code>：价格库存 / 订单物流 / 售后 / 知识 / 工单 / 天气</span>
+              <span class="chip"><code>rag</code>：parent-child 检索 + embedding + rerank + pgvector</span>
+              <span class="chip"><code>providers</code>：Chat / Embedding / Rerank</span>
+              <span class="chip hot"><code>core/resilience.py</code>：超时 / 重试 / 总预算 / 熔断</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="layer data">
+          <div class="layer-index"><div class="no">06</div><div class="en">Data</div></div>
+          <div class="layer-main">
+            <div class="layer-title"><h3>数据层</h3><span>持久化 + 外部模型</span></div>
+            <div class="chips">
+              <span class="chip">PostgreSQL：会话 / 消息 / 订单 / 售后 / 工单 / 知识</span>
+              <span class="chip">pgvector：<code>semantic_cache</code> 100 条 FAQ</span>
+              <span class="chip">本地：<code>data/return_images</code>、<code>data/eval</code>、<code>data/semantic_cache</code></span>
+              <span class="chip">外部：Chat / Embedding / Rerank API；YOLO 本地权重</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="chain">
+        <div class="chain-head">
+          <span class="label">MAIN CHAIN</span>
+          <span class="note">一次普通问答的实际调用顺序</span>
+        </div>
+        <div class="steps">
+          <span class="step">POST /messages/stream</span><span class="arrow">→</span>
+          <span class="step">鉴权 / 限流</span><span class="arrow">→</span>
+          <span class="step">人工中检查</span><span class="arrow">→</span>
+          <span class="step">存 user</span><span class="arrow">→</span>
+          <span class="step">FAQ 缓存</span><span class="arrow">→</span>
+          <span class="step">LangGraph 路由</span><span class="arrow">→</span>
+          <span class="step">tools / RAG / LLM</span><span class="arrow">→</span>
+          <span class="step">哨兵校验</span><span class="arrow">→</span>
+          <span class="step">落库</span><span class="arrow">→</span>
+          <span class="step">SSE token / replace / done</span>
+        </div>
+      </div>
+    </main>
+
+    <aside class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>三类兜底</h2>
+          <p>只写代码里真实存在的机制</p>
+        </div>
+        <span class="stack-note">缺口即优化输入</span>
+      </div>
+
+      <section class="fb-card model">
+        <div class="fb-head">
+          <h3>模型失败 → 自动重试</h3>
+          <span class="badge partial">部分有</span>
+        </div>
+        <p class="fb-sub"><b>非流式有，流式没有。</b> 统一重试 / 熔断框架，预算按 provider 配置。</p>
+        <ul class="fb-list">
+          <li class="have"><b>有：</b><code>complete</code>（chat / embedding / rerank）走 <code>execute_with_resilience</code></li>
+          <li class="have">默认重试 <b>2 次</b>（共 3 次尝试），固定 <b>0.5s</b> 退避</li>
+          <li class="have">chat 30s/次、60s 总预算；embedding 20s/60s；rerank 15s/30s</li>
+          <li class="have">可重试：<b>timeout / connection / rate_limit</b>；auth / invalid / quota 不重试</li>
+          <li class="have">连续 <b>3 次</b>最终失败 → 熔断 <b>30s</b></li>
+          <li class="miss"><b>没有：</b>流式 <code>stream</code> 自动重试；只有 30s 空闲超时 + 60s 总预算</li>
+          <li class="have">chat 最终失败 → <code>PROVIDER_FAILURE_ANSWER</code> + 转人工工单</li>
+        </ul>
+      </section>
+
+      <section class="fb-card tool">
+        <div class="fb-head">
+          <h3>tool 故障 → 服务降级</h3>
+          <span class="badge ok">有基础降级</span>
+        </div>
+        <p class="fb-sub">工具失败不硬编事实，统一降到安全话术与人工。</p>
+        <ul class="fb-list">
+          <li class="have">知识检索异常 / 无结果 / 上下文不足 → <code>knowledge_gap</code> + 安全话术 + 工单</li>
+          <li class="have">商品、订单、售后查询异常 → <code>KNOWLEDGE_GAP_REPLY</code> + 转人工</li>
+          <li class="have">售后状态区分 <code>query_error</code> / <code>no_records</code> / <code>not_available</code></li>
+          <li class="have">FAQ 缓存异常 → 跳过缓存继续主链路；哨兵异常 → fail open</li>
+          <li class="miss"><b>没有：</b>备用数据源、静态知识兜底、工具级重试 / 熔断</li>
+        </ul>
+      </section>
+
+      <section class="fb-card break">
+        <div class="fb-head">
+          <h3>任务中断 → 断点回复</h3>
+          <span class="badge none">没有</span>
+        </div>
+        <p class="fb-sub"><b>没有 checkpoint、断点续跑或自动续答。</b></p>
+        <ul class="fb-list">
+          <li class="have">现有：SSE 心跳保活、知识回答先缓冲再输出、<code>replace</code> 覆盖气泡</li>
+          <li class="miss">前端未收到 <code>done</code> → “流式响应中断，请重试”；回拉历史后由用户重发</li>
+          <li class="miss">槽位续接（补订单号 / 商品名）只恢复澄清意图，不是任务断点恢复</li>
+        </ul>
+      </section>
+
+      <div class="panel-foot">
+        当前缺口：<b>流式模型调用无重试</b>、<b>工具无备用源</b>、<b>任务无断点</b>。这三项直接进入下一支线“系统优化”。
+      </div>
+    </aside>
+  </div>
+
+  <div class="foot">
+    <span><strong>代码基线</strong> app/main.py · app/api/routes · app/services · app/graph · app/tools · app/rag · app/providers</span>
+    <span>2026-11-22 · 由现有代码与测试基线整理</span>
+  </div>
+</div>
+</body>
+</html>

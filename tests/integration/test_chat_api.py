@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -10,6 +11,8 @@ from sqlalchemy import select
 
 from app.api.deps import get_container
 from app.core.config import get_settings
+from app.core.errors import ProviderTimeoutError
+from app.core.resilience import ResiliencePolicy
 from app.db.models import (
     AfterSale,
     AgentRun,
@@ -55,6 +58,63 @@ class SequenceChat:
         self.calls.append(messages)
         index = len(self.calls) - 1
         return self.responses[index] if index < len(self.responses) else ""
+
+
+class ResilientStreamChat:
+    """Routes once, then streams an answer with scripted failures.
+
+    ``attempts`` entries are either an exception (fail before the first chunk),
+    a list of chunks, or a ``(chunks, error)`` tuple (emit then fail).
+    """
+
+    def __init__(
+        self,
+        attempts: list[list[str] | Exception | tuple[list[str], Exception]],
+        *,
+        fallback: str = "",
+        route_intent: str = "policy_knowledge",
+    ) -> None:
+        self.attempts = attempts
+        self.fallback = fallback
+        self.route_intent = route_intent
+        self.stream_calls = 0
+        self.complete_calls = 0
+
+    async def complete(self, messages):
+        self.complete_calls += 1
+        if self.complete_calls == 1:
+            return json.dumps(
+                {"intent": self.route_intent, "slots": {}},
+                ensure_ascii=False,
+            )
+        return self.fallback
+
+    async def stream(self, messages, model=None):
+        index = self.stream_calls
+        self.stream_calls += 1
+        if index >= len(self.attempts):
+            raise ProviderTimeoutError("chat", "no stream attempt left")
+        attempt = self.attempts[index]
+        if isinstance(attempt, Exception):
+            raise attempt
+        error: Exception | None = None
+        if isinstance(attempt, tuple):
+            chunks, error = attempt
+        else:
+            chunks = attempt
+        for chunk in chunks:
+            yield chunk
+        if error is not None:
+            raise error
+
+    @property
+    def stream_policy(self) -> ResiliencePolicy:
+        return ResiliencePolicy(
+            attempt_timeout_seconds=2.0,
+            total_budget_seconds=10.0,
+            max_retries=2,
+            backoff_seconds=0.0,
+        )
 
 
 def _make_container(chat):
@@ -1225,3 +1285,106 @@ async def test_small_refund_daily_limit_and_feedback_boundary(db_session):
             headers=_auth(token),
         )
         assert duplicate.status_code == 409
+
+
+def _sse_events(text: str) -> list[tuple[str, dict]]:
+    events: list[tuple[str, dict]] = []
+    event: str | None = None
+    for line in text.splitlines():
+        if line.startswith("event: "):
+            event = line.removeprefix("event: ")
+        elif line.startswith("data: ") and event:
+            events.append((event, json.loads(line.removeprefix("data: "))))
+            event = None
+    return events
+
+
+@pytest.mark.anyio
+async def test_stream_retry_before_first_token_emits_one_answer(
+    db_session, monkeypatch
+):
+    await create_user(db_session, "stream-retry-owner")
+
+    async def found_retrieve(*args, **kwargs):
+        return RetrievalResult(
+            parent_ids=[7],
+            context="签收后七天内可申请无理由退货，商品需保持完好。",
+        )
+
+    monkeypatch.setattr(nodes, "retrieve_knowledge", found_retrieve)
+    chat = ResilientStreamChat(
+        [
+            ProviderTimeoutError("chat", "stream first token timeout"),
+            ["签收后七天内可申请无理由退货。"],
+        ]
+    )
+    container = _make_container(chat)
+    container.agents = SimpleNamespace(
+        router=None,
+        knowledge=None,
+        chitchat=SimpleNamespace(model=None, system_prompt=None),
+    )
+
+    async with await _build_client(container) as client:
+        token = await _login(client, "stream-retry-owner")
+        conversation = (
+            await client.post("/api/conversations", json={}, headers=_auth(token))
+        ).json()
+        response = await client.post(
+            f"/api/conversations/{conversation['id']}/messages/stream",
+            json={"content": "七天无理由退货规则是什么？"},
+            headers=_auth(token),
+        )
+
+    events = _sse_events(response.text)
+    token_text = "".join(
+        payload["text"] for event, payload in events if event == "token"
+    )
+    done = [payload for event, payload in events if event == "done"][-1]
+
+    assert token_text == "签收后七天内可申请无理由退货。"
+    assert done["answer"] == token_text
+    assert not any(event == "replace" for event, _ in events)
+    assert chat.stream_calls == 2
+
+
+@pytest.mark.anyio
+async def test_visible_partial_stream_is_replaced_by_complete_answer(
+    db_session,
+):
+    await create_user(db_session, "stream-replace-owner")
+    chat = ResilientStreamChat(
+        [(["半截答案"], ProviderTimeoutError("chat", "stream idle timeout"))],
+        fallback="完整答案。",
+        route_intent="chit_chat",
+    )
+    container = _make_container(chat)
+    container.agents = SimpleNamespace(
+        router=None,
+        chitchat=SimpleNamespace(model=None, system_prompt=None),
+    )
+
+    async with await _build_client(container) as client:
+        token = await _login(client, "stream-replace-owner")
+        conversation = (
+            await client.post("/api/conversations", json={}, headers=_auth(token))
+        ).json()
+        response = await client.post(
+            f"/api/conversations/{conversation['id']}/messages/stream",
+            json={"content": "陪我聊聊天"},
+            headers=_auth(token),
+        )
+
+    events = _sse_events(response.text)
+    token_text = "".join(
+        payload["text"] for event, payload in events if event == "token"
+    )
+    replacements = [
+        payload["text"] for event, payload in events if event == "replace"
+    ]
+    done = [payload for event, payload in events if event == "done"][-1]
+
+    assert token_text == "半截答案"
+    assert replacements == ["完整答案。"]
+    assert done["answer"] == "完整答案。"
+    assert chat.stream_calls == 1

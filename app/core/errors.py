@@ -57,6 +57,27 @@ class ProviderTimeoutError(ProviderError):
     retryable = True
 
 
+class ProviderStreamInterruptedError(ProviderError):
+    """A stream failed after tokens were already visible to the customer.
+
+    Retrying the original stream would duplicate a partial answer. The caller
+    must use a non-streaming completion and replace the bubble instead.
+    """
+
+    category = "stream_interrupted"
+    retryable = False
+
+    def __init__(
+        self,
+        provider: str,
+        reason: str = "",
+        *,
+        cause_category: str = "",
+    ) -> None:
+        self.cause_category = cause_category
+        super().__init__(provider, reason)
+
+
 class ProviderBudgetExceededError(ProviderError):
     category = "budget_exceeded"
     retryable = False

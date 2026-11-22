@@ -186,6 +186,64 @@ class Settings(BaseSettings):
     rerank_total_budget_seconds: float = Field(
         default=30.0, validation_alias="RERANK_TOTAL_BUDGET_SECONDS"
     )
+    # P0 stream resilience. Both flags default on; disable per environment if a
+    # provider's stream semantics turn out to be incompatible with retries.
+    stream_retry_enabled: bool = Field(
+        default=True, validation_alias="STREAM_RETRY_ENABLED"
+    )
+    stream_partial_fallback_enabled: bool = Field(
+        default=True, validation_alias="STREAM_PARTIAL_FALLBACK_ENABLED"
+    )
+
+    # Read-only Function Calling pilot. Disabled by default; the deterministic
+    # graph remains the fallback path when the flag is off or the plan fails.
+    fc_readonly_enabled: bool = Field(
+        default=False, validation_alias="FC_READONLY_ENABLED"
+    )
+    fc_max_steps: int = Field(default=2, validation_alias="FC_MAX_STEPS")
+    fc_allowed_tools: str = Field(
+        default="order_list,order_detail",
+        validation_alias="FC_ALLOWED_TOOLS",
+    )
+    fc_planner_model: str = Field(
+        default="", validation_alias="FC_PLANNER_MODEL"
+    )
+
+    # Deterministic context assembly. Disabled by default so the existing
+    # prompt path remains a one-flag rollback.
+    context_engine_enabled: bool = Field(
+        default=False, validation_alias="CONTEXT_ENGINE_ENABLED"
+    )
+    context_max_chars: int = Field(
+        default=6000,
+        ge=1000,
+        le=50000,
+        validation_alias="CONTEXT_MAX_CHARS",
+    )
+    context_history_turns: int = Field(
+        default=6,
+        ge=1,
+        le=20,
+        validation_alias="CONTEXT_HISTORY_TURNS",
+    )
+    context_history_max_chars: int = Field(
+        default=3000,
+        ge=200,
+        le=20000,
+        validation_alias="CONTEXT_HISTORY_MAX_CHARS",
+    )
+    context_tool_facts_max_chars: int = Field(
+        default=1200,
+        ge=100,
+        le=8000,
+        validation_alias="CONTEXT_TOOL_FACTS_MAX_CHARS",
+    )
+    context_slots_max_chars: int = Field(
+        default=300,
+        ge=50,
+        le=2000,
+        validation_alias="CONTEXT_SLOTS_MAX_CHARS",
+    )
 
     # App
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
@@ -205,6 +263,11 @@ class Settings(BaseSettings):
     def sentinel_model_name(self) -> str:
         """The sentinel uses the router tier unless explicitly overridden."""
         return self.sentinel_model or self.router_model
+
+    @property
+    def fc_planner_model_name(self) -> str:
+        """Use the router tier for cheap tool planning unless overridden."""
+        return self.fc_planner_model or self.router_model
 
 
 @lru_cache

@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
+from typing import Any
+
+from app.context.builder import build_context_pack, context_engine_enabled
+from app.context.models import ContextPack
 
 ROUTER_SYSTEM = """你是电商客服系统的意图识别器。请根据当前用户消息及系统明确提供的上下文，将用户问题归入唯一一个意图，并提取槽位。只输出一个严格可解析的 JSON 对象，不要输出解释、Markdown、代码块、注释或多余文字。
 
@@ -49,13 +54,45 @@ ROUTER_SYSTEM = """你是电商客服系统的意图识别器。请根据当前�
 """
 
 
+def build_router_pack(
+    history: list[dict],
+    user_message: str,
+    *,
+    slots: Mapping[str, Any] | None = None,
+    system_prompt: str | None = None,
+    settings: Any | None = None,
+) -> ContextPack:
+    """Build a bounded router prompt with readable slot lines."""
+    return build_context_pack(
+        purpose="router",
+        system_prompt=system_prompt or ROUTER_SYSTEM,
+        history=history,
+        user_message=user_message,
+        slots=slots,
+        settings=settings,
+    )
+
+
 def build_router_messages(
     history: list[dict],
     user_message: str,
     *,
-    slots: dict | None = None,
+    slots: Mapping[str, Any] | None = None,
     system_prompt: str | None = None,
+    settings: Any | None = None,
+    context_pack: ContextPack | None = None,
 ) -> list[dict]:
+    if context_pack is not None:
+        return context_pack.to_messages()
+    if context_engine_enabled(settings):
+        return build_router_pack(
+            history,
+            user_message,
+            slots=slots,
+            system_prompt=system_prompt,
+            settings=settings,
+        ).to_messages()
+
     system_content = system_prompt or ROUTER_SYSTEM
     if slots:
         system_content += (

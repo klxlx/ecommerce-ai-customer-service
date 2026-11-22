@@ -8,9 +8,13 @@ deterministic templates built on SQL tool results, never from the LLM.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from decimal import Decimal, InvalidOperation
 
+from app.context.builder import context_engine_enabled
+from app.core.errors import ProviderError
+from app.core.resilience import ResiliencePolicy, execute_stream_with_resilience
 from app.graph.router import (
     extract_order_no,
     is_after_sale_progress_query,
@@ -26,8 +30,16 @@ from app.graph.state import (
     MAX_CLARIFICATION_ATTEMPTS,
     AgentState,
 )
-from app.prompts.answer import KNOWLEDGE_GAP_MARKER, build_answer_messages
-from app.prompts.chitchat import build_chitchat_messages
+from app.graph.tool_planner import run_order_tool_loop
+from app.prompts.answer import (
+    KNOWLEDGE_GAP_MARKER,
+    build_answer_messages,
+    build_answer_pack,
+    build_order_tool_answer_messages,
+    build_order_tool_answer_pack,
+)
+from app.prompts.chitchat import build_chitchat_messages, build_chitchat_pack
+from app.prompts.tool_planner import build_tool_planner_messages
 from app.schemas.after_sales import AfterSaleFact
 from app.schemas.catalog import AmbiguousProduct, ProductFact
 from app.schemas.orders import OrderFact
@@ -141,19 +153,57 @@ async def _complete_answer(
     sink = state.get("stream")
     stream_factory = getattr(chat, "stream", None)
     if sink is not None and callable(stream_factory):
-        stream = stream_factory(messages, model=model)
+        settings = state.get("settings")
+        metrics = state.get("metrics")
+        retry_enabled = bool(getattr(settings, "stream_retry_enabled", True))
+        partial_fallback_enabled = bool(
+            getattr(settings, "stream_partial_fallback_enabled", True)
+        )
+
+        policy = getattr(chat, "stream_policy", None)
+        if not isinstance(policy, ResiliencePolicy):
+            if settings is not None:
+                policy = ResiliencePolicy(
+                    attempt_timeout_seconds=settings.chat_attempt_timeout_seconds,
+                    total_budget_seconds=settings.chat_total_budget_seconds,
+                    max_retries=settings.provider_max_retries,
+                    backoff_seconds=settings.provider_retry_backoff_seconds,
+                )
+            else:
+                policy = ResiliencePolicy(
+                    attempt_timeout_seconds=30.0,
+                    total_budget_seconds=60.0,
+                    max_retries=2,
+                    backoff_seconds=0.5,
+                )
+
+        visible_token_emitted = False
+        buffered: list[str] = []
+
+        if retry_enabled:
+            stream = execute_stream_with_resilience(
+                provider="chat",
+                stream_factory=lambda: stream_factory(messages, model=model),
+                policy=policy,
+                metrics=metrics,
+                should_stop_retry=lambda: visible_token_emitted,
+                on_retry=buffered.clear,
+            )
+        else:
+            stream = stream_factory(messages, model=model)
+
         try:
             if sentinel is not None:
-                parts: list[str] = []
                 async for delta in stream:
                     if delta:
-                        parts.append(delta)
-                answer = "".join(parts).strip()
+                        buffered.append(delta)
+                answer = "".join(buffered).strip()
                 if answer and sentinel not in answer:
                     if empathy_text:
                         answer = ensure_empathy(empathy_text, answer)
                     for start in range(0, len(answer), 12):
                         await sink(answer[start : start + 12])
+                        visible_token_emitted = True
                         await asyncio.sleep(0.01)
                 return answer
             else:
@@ -170,9 +220,50 @@ async def _complete_answer(
                     parts.append(delta)
                     total += len(delta)
                     await sink(delta)
+                    visible_token_emitted = True
                 answer = "".join(parts).strip()
                 if answer:
                     return answer
+        except ProviderError:
+            if not (retry_enabled and partial_fallback_enabled):
+                raise
+
+            # The original stream is never replayed after a visible token. A
+            # non-streaming completion produces one coherent answer; the SSE
+            # layer replaces the bubble when the text differs from what was
+            # already sent.
+            try:
+                if model:
+                    answer = (await chat.complete(messages, model=model)).strip()
+                else:
+                    answer = (await chat.complete(messages)).strip()
+            except ProviderError:
+                if metrics:
+                    metrics.increment(
+                        "provider.stream.fallback_complete.total",
+                        provider="chat",
+                        outcome="failure",
+                    )
+                raise
+
+            if metrics:
+                metrics.increment(
+                    "provider.stream.fallback_complete.total",
+                    provider="chat",
+                    outcome="success",
+                )
+            if not answer:
+                return answer
+            if sentinel is not None and sentinel in answer:
+                return answer
+            if empathy_text:
+                answer = ensure_empathy(empathy_text, answer)
+            if not visible_token_emitted:
+                for start in range(0, len(answer), 12):
+                    await sink(answer[start : start + 12])
+                    visible_token_emitted = True
+                    await asyncio.sleep(0.01)
+            return answer
         finally:
             close = getattr(stream, "aclose", None)
             if callable(close):
@@ -390,6 +481,7 @@ async def route_node(state: AgentState) -> dict:
         slots=existing_slots,
         model=getattr(router_agent, "model", None),
         system_prompt=getattr(router_agent, "system_prompt", None),
+        settings=state.get("settings"),
     )
     if decision is None:
         return {
@@ -450,13 +542,27 @@ async def knowledge_node(state: AgentState) -> dict:
     current = state.get("user_message", "").strip()
     if not _KNOWLEDGE_FOLLOW_UP_PATTERN.search(current):
         history = []
-    messages = build_answer_messages(
-        history,
-        current,
-        result.context,
-        "",
-        system_prompt=getattr(knowledge_agent, "system_prompt", None),
-    )
+    settings = state.get("settings")
+    context_manifest = None
+    if context_engine_enabled(settings):
+        pack = build_answer_pack(
+            history,
+            current,
+            result.context,
+            slots=state.get("slots", {}),
+            system_prompt=getattr(knowledge_agent, "system_prompt", None),
+            settings=settings,
+        )
+        messages = pack.to_messages()
+        context_manifest = pack.manifest.as_dict()
+    else:
+        messages = build_answer_messages(
+            history,
+            current,
+            result.context,
+            "",
+            system_prompt=getattr(knowledge_agent, "system_prompt", None),
+        )
     model = getattr(knowledge_agent, "model", None)
     answer = await _complete_answer(
         state,
@@ -487,6 +593,7 @@ async def knowledge_node(state: AgentState) -> dict:
         "sources": [s.__dict__ for s in result.sources],
         "grounding_context": result.context,
         "tool_evidence": {"kb_type": kb_type, "parent_ids": result.parent_ids},
+        "context_manifest": context_manifest,
     }
 
 
@@ -600,6 +707,96 @@ async def order_node(state: AgentState) -> dict:
     # Missing and unauthorized orders return the same non-enumerating message.
     return {
         "answer": "抱歉，未查询到该订单，请核对订单号后重试。",
+    }
+
+
+async def order_fc_node(state: AgentState) -> dict:
+    """Read-only Function Calling pilot with deterministic fallback.
+
+    The planner may only choose an allowlisted order tool and fill ``order_no``.
+    ``user_id`` never comes from model output. Any planning error, non-ok tool
+    result, empty list, or empty answer falls back to the existing order node.
+    """
+    settings = state.get("settings")
+    if not settings or not getattr(settings, "fc_readonly_enabled", False):
+        return await order_node(state)
+
+    planner_messages = build_tool_planner_messages(
+        state.get("history", []),
+        state.get("user_message", ""),
+        slots=state.get("slots", {}),
+        settings=settings,
+    )
+    try:
+        plan = await run_order_tool_loop(
+            chat=state["chat"],
+            settings=settings,
+            messages=planner_messages,
+            session=state["session"],
+            user_id=state["user_id"],
+            metrics=state.get("metrics"),
+        )
+    except Exception:
+        result = await order_node(state)
+        result["fc"] = {
+            "enabled": True,
+            "steps": 0,
+            "fallback_reason": "planner_error",
+            "tool_calls": [],
+        }
+        return result
+
+    empty_list = plan.evidence.get("orders") == []
+    if plan.fallback_reason or not plan.evidence or empty_list:
+        result = await order_node(state)
+        result["fc"] = plan.trace()
+        return result
+
+    context_manifest = None
+    if context_engine_enabled(settings):
+        pack = build_order_tool_answer_pack(
+            state.get("history", []),
+            state.get("user_message", ""),
+            plan.evidence,
+            slots=state.get("slots", {}),
+            settings=settings,
+        )
+        answer_messages = pack.to_messages()
+        context_manifest = pack.manifest.as_dict()
+    else:
+        evidence_text = json.dumps(
+            plan.evidence, ensure_ascii=False, default=str
+        )
+        answer_messages = build_order_tool_answer_messages(
+            state.get("history", []),
+            state.get("user_message", ""),
+            evidence_text,
+        )
+    knowledge_agent = getattr(state.get("agents"), "knowledge", None)
+    answer_model = getattr(knowledge_agent, "model", None)
+    try:
+        answer = await _complete_answer(
+            state,
+            answer_messages,
+            model=answer_model,
+        )
+    except ProviderError:
+        result = await order_node(state)
+        result["fc"] = plan.trace()
+        return result
+
+    answer = (answer or "").strip()
+    if not answer or KNOWLEDGE_GAP_MARKER in answer:
+        result = await order_node(state)
+        result["fc"] = plan.trace()
+        return result
+
+    return {
+        "intent": "order",
+        "answer": answer,
+        "tool_evidence": plan.evidence,
+        "fc": plan.trace(),
+        "context_manifest": context_manifest,
     }
 
 
@@ -1006,11 +1203,23 @@ async def chitchat_node(state: AgentState) -> dict:
             "tool_evidence": {"local_time": local_time_fact},
         }
 
-    messages = build_chitchat_messages(
-        state.get("history", []),
-        user_message,
-        facts,
-    )
+    settings = state.get("settings")
+    context_manifest = None
+    if context_engine_enabled(settings):
+        pack = build_chitchat_pack(
+            state.get("history", []),
+            user_message,
+            facts,
+            settings=settings,
+        )
+        messages = pack.to_messages()
+        context_manifest = pack.manifest.as_dict()
+    else:
+        messages = build_chitchat_messages(
+            state.get("history", []),
+            user_message,
+            facts,
+        )
     model = getattr(chitchat_agent, "model", None)
     answer = await _complete_answer(state, messages, model=model, max_chars=200)
     answer = _truncate_at_sentence(answer, 200)
@@ -1020,6 +1229,7 @@ async def chitchat_node(state: AgentState) -> dict:
     result = {
         "answer": answer,
         "chit_chat_streak": streak + 1,
+        "context_manifest": context_manifest,
     }
     if tool_evidence:
         result["tool_evidence"] = tool_evidence

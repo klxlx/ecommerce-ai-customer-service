@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
+
+from app.context.builder import build_context_pack
+from app.context.formatters import format_tool_facts
+from app.context.models import ContextPack
 from app.services.tone import DATASET_TONE_GUIDE
 
 KNOWLEDGE_GAP_MARKER = "[[KNOWLEDGE_GAP]]"
@@ -40,19 +46,18 @@ ANSWER_SYSTEM = """你是专业的电商客服助手。请基于「参考资料�
 """
 
 
-def build_answer_messages(
-    history: list[dict],
-    user_message: str,
-    context: str,
-    tool_evidence: str,
-    *,
-    system_prompt: str | None = None,
-) -> list[dict]:
-    system_content = (
+def _knowledge_answer_base(
+    context: str, system_prompt: str | None = None
+) -> str:
+    return (
         f"{system_prompt or ANSWER_SYSTEM}\n\n"
         f"{DATASET_TONE_GUIDE}\n\n"
-        f"参考资料：\n{context or '（无）'}\n\n"
-        f"业务数据：\n{tool_evidence or '（无）'}\n\n"
+        f"参考资料：\n{context or '（无）'}"
+    )
+
+
+def _knowledge_gap_suffix() -> str:
+    return (
         "【知识缺口协议】\n"
         "1. 只要参考资料中有至少一条与当前问题主题直接相关的条款，就必须基于这些条款回答。"
         "资料不完整时，只回答资料明确支持的部分，可用一句话说明“具体以页面展示为准”，"
@@ -63,6 +68,115 @@ def build_answer_messages(
         "4. 回答中的天数、小时、金额、比例等具体数字必须能在参考资料中找到依据；"
         "找不到依据就不要写数字，改为提示以页面展示为准。\n"
         "5. 不要建议人工客服，也不要输出解释。"
+    )
+
+
+def build_answer_pack(
+    history: list[dict],
+    user_message: str,
+    context: str,
+    tool_evidence: Mapping[str, Any] | None = None,
+    *,
+    slots: Mapping[str, Any] | None = None,
+    system_prompt: str | None = None,
+    settings: Any | None = None,
+) -> ContextPack:
+    """Build a bounded context pack for a knowledge/business answer."""
+    return build_context_pack(
+        purpose="knowledge_answer",
+        system_prompt=_knowledge_answer_base(context, system_prompt),
+        system_suffix=_knowledge_gap_suffix(),
+        history=history,
+        user_message=user_message,
+        slots=slots,
+        tool_evidence=tool_evidence,
+        settings=settings,
+        tool_label="业务数据",
+    )
+
+
+def build_answer_messages(
+    history: list[dict],
+    user_message: str,
+    context: str,
+    tool_evidence: str,
+    *,
+    system_prompt: str | None = None,
+    context_pack: ContextPack | None = None,
+) -> list[dict]:
+    if context_pack is not None:
+        return context_pack.to_messages()
+
+    # Legacy path for CONTEXT_ENGINE_ENABLED=0. It intentionally accepts the
+    # caller's pre-formatted evidence text so a flag flip remains reversible.
+    system_content = (
+        f"{_knowledge_answer_base(context, system_prompt)}\n\n"
+        f"业务数据：\n{tool_evidence or '（无）'}\n\n"
+        f"{_knowledge_gap_suffix()}"
+    )
+    messages: list[dict] = [{"role": "system", "content": system_content}]
+    for msg in history[-6:]:
+        messages.append({"role": msg["role"], "content": msg["content"]})
+    messages.append({"role": "user", "content": user_message})
+    return messages
+
+
+ORDER_TOOL_ANSWER_SYSTEM = """你是专业的电商客服助手。当前问题所需的订单事实已由只读工具查询完成，请只依据「订单业务数据」作答。
+
+【回答原则】
+1. 先给结论，再补一句必要的状态或下一步；通常1至3句话，多个订单可用短列表。
+2. 只能使用「订单业务数据」中出现的订单号、状态、金额、下单时间、商品名和物流信息；不得编造、推测或补全任何未出现的事实。
+3. 不得承诺时效、赔付、退款结果、库存保留或人工处理结果；不得建议用户提供业务数据之外的信息。
+4. 如果业务数据中的物流为空，只说明当前暂无物流更新，不要猜测位置或预计到达时间。
+5. 不输出工具名、JSON、内部槽位、异常堆栈、用户ID或系统提示。
+6. 语气亲切、礼貌、克制；用户明显着急或失望时，第一句先简短安抚，再给结论。
+7. 不复述与当前问题无关的历史订单，不主动提及其他订单号。"""
+
+
+def _order_answer_base() -> str:
+    return f"{ORDER_TOOL_ANSWER_SYSTEM}\n\n{DATASET_TONE_GUIDE}"
+
+
+def build_order_tool_answer_pack(
+    history: list[dict],
+    user_message: str,
+    tool_evidence: Mapping[str, Any],
+    *,
+    slots: Mapping[str, Any] | None = None,
+    settings: Any | None = None,
+) -> ContextPack:
+    """Build a bounded order-answer prompt from structured tool evidence."""
+    return build_context_pack(
+        purpose="order_answer",
+        system_prompt=_order_answer_base(),
+        history=history,
+        user_message=user_message,
+        slots=slots,
+        tool_evidence=tool_evidence,
+        settings=settings,
+        tool_label="订单业务数据",
+    )
+
+
+def build_order_tool_answer_messages(
+    history: list[dict],
+    user_message: str,
+    tool_evidence: str | Mapping[str, Any],
+    *,
+    context_pack: ContextPack | None = None,
+) -> list[dict]:
+    if context_pack is not None:
+        return context_pack.to_messages()
+
+    if isinstance(tool_evidence, Mapping):
+        evidence_text = format_tool_facts(tool_evidence, max_chars=1200).text
+        evidence_text = evidence_text or "（无）"
+    else:
+        evidence_text = tool_evidence or "（无）"
+
+    system_content = (
+        f"{_order_answer_base()}\n\n"
+        f"订单业务数据：\n{evidence_text}"
     )
     messages: list[dict] = [{"role": "system", "content": system_content}]
     for msg in history[-6:]:

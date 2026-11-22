@@ -6,14 +6,27 @@ import asyncio
 
 import pytest
 
+from app.core import resilience
 from app.core.errors import (
     ProviderAuthenticationError,
     ProviderBudgetExceededError,
     ProviderConnectionError,
+    ProviderStreamInterruptedError,
     ProviderTimeoutError,
 )
 from app.core.metrics import MetricsRegistry
-from app.core.resilience import ResiliencePolicy, execute_with_resilience
+from app.core.resilience import (
+    ResiliencePolicy,
+    execute_stream_with_resilience,
+    execute_with_resilience,
+)
+
+
+@pytest.fixture(autouse=True)
+def reset_circuits():
+    resilience._circuits.clear()
+    yield
+    resilience._circuits.clear()
 
 
 def _policy(**overrides) -> ResiliencePolicy:
@@ -71,6 +84,67 @@ async def test_non_retryable_authentication_error_stops_immediately():
         )
 
     assert attempts == 1
+
+
+@pytest.mark.anyio
+async def test_stream_retries_before_the_first_chunk():
+    attempts = 0
+    metrics = MetricsRegistry()
+
+    async def flaky_stream():
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise ProviderTimeoutError("chat", "stream first token timeout")
+        yield "ok"
+
+    chunks = [
+        chunk
+        async for chunk in execute_stream_with_resilience(
+            provider="chat",
+            stream_factory=flaky_stream,
+            policy=_policy(backoff_seconds=0.0),
+            metrics=metrics,
+        )
+    ]
+
+    assert "".join(chunks) == "ok"
+    assert attempts == 3
+    snapshot = metrics.snapshot()
+    assert (
+        snapshot["counters"]["provider.stream.attempt.total"]["provider=chat"]
+        == 3
+    )
+    assert snapshot["counters"]["provider.stream.retry.total"][
+        "provider=chat,reason=timeout"
+    ] == 2
+
+
+@pytest.mark.anyio
+async def test_stream_does_not_retry_after_a_visible_chunk():
+    attempts = 0
+    visible = False
+
+    async def failing_stream():
+        nonlocal attempts
+        attempts += 1
+        yield "半截"
+        raise ProviderTimeoutError("chat", "stream idle timeout")
+
+    stream = execute_stream_with_resilience(
+        provider="chat",
+        stream_factory=failing_stream,
+        policy=_policy(backoff_seconds=0.0),
+        should_stop_retry=lambda: visible,
+    )
+
+    with pytest.raises(ProviderStreamInterruptedError) as caught:
+        async for chunk in stream:
+            assert chunk == "半截"
+            visible = True
+
+    assert attempts == 1
+    assert caught.value.cause_category == "timeout"
 
 
 @pytest.mark.anyio

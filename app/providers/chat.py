@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
-from typing import Protocol
+from dataclasses import dataclass, field
+from typing import Any, Protocol
 
 from openai import (
     APIConnectionError,
@@ -36,12 +38,39 @@ from app.core.resilience import (
 )
 
 
+@dataclass
+class ChatToolCall:
+    """One normalized function-call item from the provider."""
+
+    id: str
+    name: str
+    arguments: dict[str, Any] = field(default_factory=dict)
+    raw_arguments: str = ""
+
+
+@dataclass
+class ChatToolResponse:
+    """Content plus tool calls returned by a tool-enabled completion."""
+
+    content: str = ""
+    tool_calls: list[ChatToolCall] = field(default_factory=list)
+    finish_reason: str = ""
+
+
 class ChatProvider(Protocol):
     async def complete(
         self,
         messages: list[dict],
         model: str | None = None,
     ) -> str: ...
+
+    async def complete_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        model: str | None = None,
+        tool_choice: str | dict = "auto",
+    ) -> ChatToolResponse: ...
 
     def stream(
         self,
@@ -84,6 +113,11 @@ class OpenAICompatChat:
             client is not None and bool(client_key)
         )
 
+    @property
+    def stream_policy(self) -> ResiliencePolicy:
+        """Expose the same bounded retry policy used by completions."""
+        return self._policy
+
     async def complete(
         self,
         messages: list[dict],
@@ -107,6 +141,65 @@ class OpenAICompatChat:
                     "chat", "provider returned no completion choices"
                 )
             return (resp.choices[0].message.content or "").strip()
+
+        return await execute_with_resilience(
+            provider="chat",
+            operation=operation,
+            policy=self._policy,
+            metrics=self._metrics,
+        )
+
+    async def complete_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        model: str | None = None,
+        tool_choice: str | dict = "auto",
+    ) -> ChatToolResponse:
+        """Return normalized function calls without executing anything."""
+
+        async def operation() -> ChatToolResponse:
+            if not self._configured:
+                raise ProviderAuthenticationError(
+                    "chat", "CHAT_API_KEY is not configured"
+                )
+            try:
+                resp = await self._client.chat.completions.create(
+                    model=model or self._model,
+                    messages=messages,
+                    temperature=0.0,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                )
+            except OpenAIError as exc:
+                raise _map_openai_error(exc) from exc
+            if not resp.choices:
+                raise ProviderInvalidRequestError(
+                    "chat", "provider returned no completion choices"
+                )
+            message = resp.choices[0].message
+            tool_calls: list[ChatToolCall] = []
+            for call in message.tool_calls or []:
+                raw_arguments = call.function.arguments or "{}"
+                try:
+                    parsed = json.loads(raw_arguments)
+                except json.JSONDecodeError:
+                    parsed = {}
+                if not isinstance(parsed, dict):
+                    parsed = {}
+                tool_calls.append(
+                    ChatToolCall(
+                        id=call.id,
+                        name=call.function.name,
+                        arguments=parsed,
+                        raw_arguments=raw_arguments,
+                    )
+                )
+            return ChatToolResponse(
+                content=(message.content or "").strip(),
+                tool_calls=tool_calls,
+                finish_reason=resp.choices[0].finish_reason or "",
+            )
 
         return await execute_with_resilience(
             provider="chat",

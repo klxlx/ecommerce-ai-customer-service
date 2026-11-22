@@ -196,6 +196,8 @@ async def run_chat(
         "weather": container.weather,
         "local_time": container.local_time,
         "stream": token_sink,
+        "settings": container.settings,
+        "metrics": metrics,
     }
 
     graph = build_graph(container)
@@ -510,6 +512,8 @@ async def _persist_result(
         "knowledge_gap": is_knowledge_gap and not limit_exceeded,
         "ticket_policy": ticket_policy,
         "sentinel": result.get("sentinel"),
+        "fc": result.get("fc"),
+        "context": result.get("context_manifest"),
     }
     agent_run = await chat_repo.create_agent_run(session, conversation.id, intent, trace)
     await chat_repo.create_tool_call_log(

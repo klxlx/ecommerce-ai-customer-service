@@ -31,6 +31,8 @@ class AgentState(TypedDict, total=False):
     slots: dict[str, Any]
     sources: list[dict[str, Any]]
     tool_evidence: dict[str, Any]
+    fc: dict[str, Any]
+    context_manifest: dict[str, Any] | None
     grounding_context: str
     after_sale_context: dict[str, Any] | None
     chit_chat_streak: int
@@ -46,3 +48,5 @@ class AgentState(TypedDict, total=False):
     weather: Any
     local_time: Callable[[], dict[str, str]]
     stream: Callable[[str], Awaitable[None]] | None
+    settings: Any
+    metrics: Any
