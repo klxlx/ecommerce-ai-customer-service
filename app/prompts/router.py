@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from app.context.builder import build_context_pack, context_engine_enabled
+from app.context.formatters import format_slots
 from app.context.models import ContextPack
 
 ROUTER_SYSTEM = """你是电商客服系统的意图识别器。请根据当前用户消息及系统明确提供的上下文，将用户问题归入唯一一个意图，并提取槽位。只输出一个严格可解析的 JSON 对象，不要输出解释、Markdown、代码块、注释或多余文字。
@@ -53,6 +54,11 @@ ROUTER_SYSTEM = """你是电商客服系统的意图识别器。请根据当前�
 3. 输出必须是一个 JSON 对象，字符串使用双引号，无尾逗号、无注释、无额外文本。
 """
 
+ROUTER_OUTPUT_SUFFIX = (
+    "\n\n（系统指令：你只负责意图识别，不要回答用户问题；"
+    "只输出一个 JSON 对象，不要输出寒暄、解释或 Markdown。）"
+)
+
 
 def build_router_pack(
     history: list[dict],
@@ -73,6 +79,21 @@ def build_router_pack(
     )
 
 
+def _append_router_output_suffix(messages: list[dict]) -> list[dict]:
+    """Anchor JSON-only output at the end of the message list.
+
+    A system-only instruction is too far from the current turn when a long
+    assistant history is present; the model then answers as the customer-service
+    persona instead of classifying. Repeating the constraint on the final user
+    message keeps the router task dominant.
+    """
+    if messages and messages[-1].get("role") == "user":
+        messages[-1]["content"] = (
+            f"{messages[-1].get('content', '')}{ROUTER_OUTPUT_SUFFIX}"
+        )
+    return messages
+
+
 def build_router_messages(
     history: list[dict],
     user_message: str,
@@ -83,15 +104,17 @@ def build_router_messages(
     context_pack: ContextPack | None = None,
 ) -> list[dict]:
     if context_pack is not None:
-        return context_pack.to_messages()
+        return _append_router_output_suffix(context_pack.to_messages())
     if context_engine_enabled(settings):
-        return build_router_pack(
-            history,
-            user_message,
-            slots=slots,
-            system_prompt=system_prompt,
-            settings=settings,
-        ).to_messages()
+        return _append_router_output_suffix(
+            build_router_pack(
+                history,
+                user_message,
+                slots=slots,
+                system_prompt=system_prompt,
+                settings=settings,
+            ).to_messages()
+        )
 
     system_content = system_prompt or ROUTER_SYSTEM
     if slots:
@@ -104,5 +127,41 @@ def build_router_messages(
     messages: list[dict] = [{"role": "system", "content": system_content}]
     for msg in history[-6:]:
         messages.append({"role": msg["role"], "content": msg["content"]})
-    messages.append({"role": "user", "content": user_message})
+    messages.append(
+        {
+            "role": "user",
+            "content": f"{user_message}{ROUTER_OUTPUT_SUFFIX}",
+        }
+    )
     return messages
+
+
+def build_router_repair_messages(
+    user_message: str,
+    *,
+    slots: Mapping[str, Any] | None = None,
+    system_prompt: str | None = None,
+) -> list[dict]:
+    """Minimal retry prompt used only after a non-JSON router response.
+
+    No assistant history is included: the goal is to remove the conversational
+    context that caused the model to answer the user instead of classifying.
+    """
+    system_content = system_prompt or ROUTER_SYSTEM
+    formatted = format_slots(slots, max_chars=300)
+    if formatted.text:
+        system_content += f"\n\n【当前会话槽位】\n{formatted.text}"
+    return [
+        {
+            "role": "system",
+            "content": (
+                f"{system_content}\n\n"
+                "【最终输出约束】现在只做意图识别。不要回答用户问题，"
+                "只输出一个 JSON 对象。"
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"{user_message}{ROUTER_OUTPUT_SUFFIX}",
+        },
+    ]

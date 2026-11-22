@@ -104,6 +104,7 @@ async def test_order_found_returns_status(monkeypatch):
     monkeypatch.setattr(nodes, "get_order_and_logistics", fake_order)
     result = await nodes.order_node(_state(slots={"order_no": "ORD-1"}))
     assert "运输中" in result["answer"]
+    assert "商品：耳机" in result["answer"]
     assert result["tool_evidence"]["order"]["order_no"] == "ORD-1"
 
 
