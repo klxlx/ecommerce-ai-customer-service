@@ -28,7 +28,7 @@ ROUTER_SYSTEM = """你是电商客服系统的意图识别器。请根据当前�
 【槽位规则】
 1. slots 固定包含 order_no、query_scope、product、refund_amount、after_sale_action 五个字段，顺序固定；未提取的槽位用空字符串 ""，不要输出 null、省略字段或自造字段。
 2. order_no：仅在用户消息明确出现订单号，或系统明确提供订单号时提取；不得从历史、常识或指代中编造。“这个订单”“我的订单”但未给订单号时留空。
-3. query_scope：仅当用户明确查询自己的全部订单、订单列表或“我的订单有哪些”时填 "list"；查询单个具体订单、订单状态或物流时留空。只有 order 意图可使用 "list"。
+3. query_scope：用户查询自己的全部订单、订单列表、“我的订单有哪些”“我的订单”“我所有的订单”“看看我的订单”时填 "list"；查询单个具体订单、订单状态或物流时留空。只有 order 意图可使用 "list"。
 4. product：提取用户明确提到的商品名称、型号或 SKU；不要泛化成“商品”，不要补全未出现的品牌或规格。
 5. refund_amount：仅在 after_sale 中尽量提取用户明确提到的退款金额，保留用户原文中的数字和币种；未提及则留空。
 6. after_sale_action：after_sale 意图必填。查询售后进度、退款到哪了、处理到哪一步填 "progress"；提出退款、退货、换货等新诉求填 "new_request"。非 after_sale 意图留空。

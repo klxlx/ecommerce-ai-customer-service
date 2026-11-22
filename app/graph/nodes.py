@@ -104,6 +104,7 @@ _CURRENCY_AMOUNT_PATTERN = re.compile(
     r"[¥￥]\s*(\d+(?:,\d{3})*(?:\.\d{1,2})?)"
 )
 _PENDING_SLOT_KEYS = ("pending_intent", "pending_slots", "missing_slot")
+_MAX_ORDER_LIST_LINES = 10
 _SLOT_ANSWER_PREFIX = re.compile(
     r"^(?:就是|是|我要|我想|想查|查询|查一下|查|看看|看一下|请问|帮我查|"
     r"请帮我查)\s*"
@@ -118,10 +119,12 @@ _KNOWLEDGE_FOLLOW_UP_PATTERN = re.compile(
     r"(?:需要|可以|是否|要不要|能不能).*(?:吗|呢|[？?])"
 )
 _ORDER_LIST_PATTERN = re.compile(
-    r"(?:我的|全部|所有)订单(?:有哪些|有什么|列表|清单|都有哪些|都有什么)"
+    r"(?:我的|我所有的|我全部的|我?全部的?|全部|所有)\s*订单"
     r"|我(?:都)?(?:有|下过)(?:哪些|什么)订单"
     r"|订单(?:列表|清单)"
-    r"|(?:全部|所有)订单"
+)
+_ORDER_LIST_EXCLUDE_PATTERN = re.compile(
+    r"(?:到哪|物流|快递|状态|发货|什么时候|退款|退货|售后|进度|订单号)"
 )
 _BUSINESS_GUARD_PATTERN = re.compile(
     r"(订单|物流|快递|发货|退款|退货|换货|售后|价格|多少钱|库存|有货|"
@@ -404,6 +407,12 @@ def _slot_answer_text(message: str) -> str:
 
 
 def _is_order_list_query(message: str) -> bool:
+    # A concrete order number or a status/logistics question keeps the turn
+    # scoped to one order; "我的订单" alone is the order-list entry point.
+    if extract_order_no(message):
+        return False
+    if _ORDER_LIST_EXCLUDE_PATTERN.search(message):
+        return False
     return bool(_ORDER_LIST_PATTERN.search(message))
 
 
@@ -690,7 +699,9 @@ async def order_node(state: AgentState) -> dict:
             }
 
         lines = [f"当前账号共有 {len(facts)} 笔订单："]
-        for index, fact in enumerate(facts, start=1):
+        for index, fact in enumerate(
+            facts[:_MAX_ORDER_LIST_LINES], start=1
+        ):
             product_names = "、".join(
                 item.product_name for item in fact.items
             ) or "商品信息未记录"
@@ -699,6 +710,11 @@ async def order_node(state: AgentState) -> dict:
                 f"金额 ¥{_money_text(fact.total_amount)} 元，"
                 f"下单时间 {fact.created_at:%Y-%m-%d %H:%M}，"
                 f"商品：{product_names}"
+            )
+        if len(facts) > _MAX_ORDER_LIST_LINES:
+            lines.append(
+                f"仅展示最近 {_MAX_ORDER_LIST_LINES} 笔，"
+                f"共 {len(facts)} 笔订单。"
             )
         return {
             "answer": "\n".join(lines),

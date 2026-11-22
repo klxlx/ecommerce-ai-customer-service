@@ -105,6 +105,35 @@ async def test_router_marks_explicit_order_list_query():
 
 
 @pytest.mark.anyio
+async def test_plain_my_orders_clears_stale_order_and_routes_to_list():
+    chat = FakeChat('{"intent": "order", "slots": {}}')
+    result = await nodes.route_node(
+        _state(
+            user_message="我的订单",
+            slots={"order_no": "ORD-20261118-0002"},
+            chat=chat,
+        )
+    )
+
+    assert result["intent"] == "order"
+    assert result["slots"]["query_scope"] == "list"
+    assert "order_no" not in result["slots"]
+    assert len(chat.calls) == 1
+
+
+@pytest.mark.anyio
+async def test_plain_my_orders_phrase_is_not_confused_with_status_query():
+    chat = FakeChat('{"intent": "order", "slots": {"order_no": "ORD-1"}}')
+    result = await nodes.route_node(
+        _state(user_message="我的订单 ORD-1 到哪了", chat=chat)
+    )
+
+    assert result["intent"] == "order"
+    assert result["slots"]["order_no"] == "ORD-1"
+    assert "query_scope" not in result["slots"]
+
+
+@pytest.mark.anyio
 async def test_router_malformed_output_falls_back_to_clarification():
     chat = FakeChat("这不是 JSON")
     result = await nodes.route_node(_state(user_message="你好呀", chat=chat))

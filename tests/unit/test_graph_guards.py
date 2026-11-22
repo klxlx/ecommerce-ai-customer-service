@@ -138,6 +138,32 @@ async def test_order_list_returns_all_owned_orders(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_order_list_caps_rendered_lines(monkeypatch):
+    facts = [
+        _order_fact(
+            order_no=f"ORD-{index:02d}",
+            status="已完成",
+            total_amount="100.00",
+        )
+        for index in range(12)
+    ]
+
+    async def fake_orders(session, user_id):
+        return facts
+
+    monkeypatch.setattr(nodes, "list_owned_orders", fake_orders)
+
+    result = await nodes.order_node(
+        _state(user_message="我所有的订单", slots={"query_scope": "list"})
+    )
+
+    assert "当前账号共有 12 笔订单" in result["answer"]
+    assert "仅展示最近 10 笔" in result["answer"]
+    assert "ORD-11" not in result["answer"]
+    assert len(result["tool_evidence"]["orders"]) == 12
+
+
+@pytest.mark.anyio
 async def test_order_not_found_is_non_enumerating(monkeypatch):
     async def fake_order(session, user_id, order_no):
         return None
