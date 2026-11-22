@@ -12,6 +12,7 @@ from app.graph.router import (
     is_explicit_handoff,
     is_new_after_sale_request,
     parse_router_decision,
+    route,
 )
 from app.graph.state import AgentState
 from app.prompts.answer import build_answer_messages
@@ -80,6 +81,19 @@ async def test_router_returns_intent_and_slots():
 
 
 @pytest.mark.anyio
+async def test_router_failure_with_explicit_order_number_routes_to_order():
+    chat = FakeChat("这不是 JSON")
+    result = await nodes.route_node(
+        _state(user_message="查一下订单 ORD-20261118-0002", chat=chat)
+    )
+
+    assert result["intent"] == "order"
+    assert result["slots"]["order_no"] == "ORD-20261118-0002"
+    assert "query_scope" not in result["slots"]
+    assert len(chat.calls) >= 1
+
+
+@pytest.mark.anyio
 async def test_router_marks_explicit_order_list_query():
     chat = FakeChat('{"intent": "order", "slots": {}}')
     result = await nodes.route_node(
@@ -88,6 +102,35 @@ async def test_router_marks_explicit_order_list_query():
     assert result["intent"] == "order"
     assert result["slots"]["query_scope"] == "list"
     assert "order_no" not in result["slots"]
+
+
+@pytest.mark.anyio
+async def test_plain_my_orders_clears_stale_order_and_routes_to_list():
+    chat = FakeChat('{"intent": "order", "slots": {}}')
+    result = await nodes.route_node(
+        _state(
+            user_message="我的订单",
+            slots={"order_no": "ORD-20261118-0002"},
+            chat=chat,
+        )
+    )
+
+    assert result["intent"] == "order"
+    assert result["slots"]["query_scope"] == "list"
+    assert "order_no" not in result["slots"]
+    assert len(chat.calls) == 1
+
+
+@pytest.mark.anyio
+async def test_plain_my_orders_phrase_is_not_confused_with_status_query():
+    chat = FakeChat('{"intent": "order", "slots": {"order_no": "ORD-1"}}')
+    result = await nodes.route_node(
+        _state(user_message="我的订单 ORD-1 到哪了", chat=chat)
+    )
+
+    assert result["intent"] == "order"
+    assert result["slots"]["order_no"] == "ORD-1"
+    assert "query_scope" not in result["slots"]
 
 
 @pytest.mark.anyio
@@ -102,6 +145,38 @@ async def test_router_invalid_intent_falls_back_to_clarification():
     chat = FakeChat('{"intent": "delete_order", "slots": {}}')
     result = await nodes.route_node(_state(user_message="删除订单", chat=chat))
     assert result["intent"] == "clarification"
+
+
+class _PersonaThenJsonChat:
+    """First turn answers like the customer-service persona, second emits JSON."""
+
+    def __init__(self) -> None:
+        self.calls: list[list[dict]] = []
+
+    async def complete(self, messages: list[dict], model: str | None = None) -> str:
+        self.calls.append(messages)
+        if len(self.calls) == 1:
+            return "亲，您好～您查询的订单不存在，请核对订单号。"
+        return '{"intent":"order","slots":{"order_no":"ORD-20261118-0002"}}'
+
+
+@pytest.mark.anyio
+async def test_router_retries_once_after_persona_answer():
+    chat = _PersonaThenJsonChat()
+
+    decision = await route(
+        chat,
+        [],
+        "查一下订单 ORD-20261118-0002",
+        slots={"order_no": "ORD-20261121-0117"},
+    )
+
+    assert decision is not None
+    assert decision.intent == "order"
+    assert decision.slots["order_no"] == "ORD-20261118-0002"
+    assert len(chat.calls) == 2
+    assert "不要回答用户问题" in chat.calls[0][-1]["content"]
+    assert "不要回答用户问题" in chat.calls[1][-1]["content"]
 
 
 def test_route_branch_maps_intent():

@@ -104,6 +104,7 @@ _CURRENCY_AMOUNT_PATTERN = re.compile(
     r"[¥￥]\s*(\d+(?:,\d{3})*(?:\.\d{1,2})?)"
 )
 _PENDING_SLOT_KEYS = ("pending_intent", "pending_slots", "missing_slot")
+_MAX_ORDER_LIST_LINES = 10
 _SLOT_ANSWER_PREFIX = re.compile(
     r"^(?:就是|是|我要|我想|想查|查询|查一下|查|看看|看一下|请问|帮我查|"
     r"请帮我查)\s*"
@@ -118,15 +119,18 @@ _KNOWLEDGE_FOLLOW_UP_PATTERN = re.compile(
     r"(?:需要|可以|是否|要不要|能不能).*(?:吗|呢|[？?])"
 )
 _ORDER_LIST_PATTERN = re.compile(
-    r"(?:我的|全部|所有)订单(?:有哪些|有什么|列表|清单|都有哪些|都有什么)"
+    r"(?:我的|我所有的|我全部的|我?全部的?|全部|所有)\s*订单"
     r"|我(?:都)?(?:有|下过)(?:哪些|什么)订单"
     r"|订单(?:列表|清单)"
-    r"|(?:全部|所有)订单"
+)
+_ORDER_LIST_EXCLUDE_PATTERN = re.compile(
+    r"(?:到哪|物流|快递|状态|发货|什么时候|退款|退货|售后|进度|订单号)"
 )
 _BUSINESS_GUARD_PATTERN = re.compile(
     r"(订单|物流|快递|发货|退款|退货|换货|售后|价格|多少钱|库存|有货|"
     r"商品|型号|sku|保修|发票|优惠|运费|支付|付款)"
 )
+_AFTER_SALE_GUARD_PATTERN = re.compile(r"(退款|退货|退换|退掉|售后)")
 
 
 def _build_handoff(state: AgentState, reason: str) -> dict:
@@ -403,6 +407,12 @@ def _slot_answer_text(message: str) -> str:
 
 
 def _is_order_list_query(message: str) -> bool:
+    # A concrete order number or a status/logistics question keeps the turn
+    # scoped to one order; "我的订单" alone is the order-list entry point.
+    if extract_order_no(message):
+        return False
+    if _ORDER_LIST_EXCLUDE_PATTERN.search(message):
+        return False
     return bool(_ORDER_LIST_PATTERN.search(message))
 
 
@@ -431,6 +441,22 @@ def _message_refund_amount(message: str) -> Decimal | None:
 
 def _money_text(amount: Decimal) -> str:
     return f"{amount:.2f}"
+
+
+def _format_order_items(fact: OrderFact) -> str:
+    """Render order items without leaking JSON or losing the product answer."""
+    parts: list[str] = []
+    for item in fact.items:
+        label = item.product_name or "商品信息未记录"
+        details = "/".join(
+            value for value in (item.model, item.color) if value
+        )
+        if details:
+            label = f"{label}（{details}）"
+        if item.quantity > 1:
+            label = f"{label} x{item.quantity}"
+        parts.append(label)
+    return "、".join(parts)
 
 
 async def route_node(state: AgentState) -> dict:
@@ -484,6 +510,12 @@ async def route_node(state: AgentState) -> dict:
         settings=state.get("settings"),
     )
     if decision is None:
+        order_no = extract_order_no(user_message)
+        if order_no and not _AFTER_SALE_GUARD_PATTERN.search(user_message):
+            slots = _clear_pending(existing_slots)
+            slots["order_no"] = order_no
+            slots.pop("query_scope", None)
+            return {"intent": "order", "slots": slots}
         return {
             "intent": "clarification",
             "clarify_question": "抱歉，我没太理解您的意思，请您再描述一下要咨询的商品或订单问题。",
@@ -667,7 +699,9 @@ async def order_node(state: AgentState) -> dict:
             }
 
         lines = [f"当前账号共有 {len(facts)} 笔订单："]
-        for index, fact in enumerate(facts, start=1):
+        for index, fact in enumerate(
+            facts[:_MAX_ORDER_LIST_LINES], start=1
+        ):
             product_names = "、".join(
                 item.product_name for item in fact.items
             ) or "商品信息未记录"
@@ -676,6 +710,11 @@ async def order_node(state: AgentState) -> dict:
                 f"金额 ¥{_money_text(fact.total_amount)} 元，"
                 f"下单时间 {fact.created_at:%Y-%m-%d %H:%M}，"
                 f"商品：{product_names}"
+            )
+        if len(facts) > _MAX_ORDER_LIST_LINES:
+            lines.append(
+                f"仅展示最近 {_MAX_ORDER_LIST_LINES} 笔，"
+                f"共 {len(facts)} 笔订单。"
             )
         return {
             "answer": "\n".join(lines),
@@ -699,6 +738,9 @@ async def order_node(state: AgentState) -> dict:
             f"您的订单 {fact.order_no} 当前状态为「{fact.status}」，"
             f"订单金额 ¥{fact.total_amount} 元。"
         ]
+        items = _format_order_items(fact)
+        if items:
+            lines.append(f"商品：{items}")
         if fact.logistics:
             latest = fact.logistics[-1]
             lines.append(f"最新物流：{latest.status}（{latest.location}）{latest.description}".rstrip())

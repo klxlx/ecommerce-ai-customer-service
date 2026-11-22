@@ -7,7 +7,10 @@ import re
 
 from pydantic import BaseModel, Field
 
-from app.prompts.router import build_router_messages
+from app.prompts.router import (
+    build_router_messages,
+    build_router_repair_messages,
+)
 from app.providers.chat import ChatProvider
 
 VALID_INTENTS = {
@@ -151,6 +154,14 @@ def parse_router_decision(text: str) -> RouterDecision | None:
     return RouterDecision(intent=intent, slots=slots)
 
 
+async def _complete_router(
+    chat: ChatProvider, messages: list[dict], model: str | None
+) -> str:
+    if model:
+        return await chat.complete(messages, model=model)
+    return await chat.complete(messages)
+
+
 async def route(
     chat: ChatProvider,
     history: list[dict],
@@ -169,8 +180,18 @@ async def route(
         system_prompt=system_prompt,
         settings=settings,
     )
-    if model:
-        text = await chat.complete(messages, model=model)
-    else:
-        text = await chat.complete(messages)
+    text = await _complete_router(chat, messages, model)
+    decision = parse_router_decision(text)
+    if decision is not None:
+        return decision
+
+    # Some models slip into the customer-service persona when a long history is
+    # present. Retry once without history and with the JSON constraint at the
+    # end; the original output is never shown to the user.
+    repair_messages = build_router_repair_messages(
+        user_message,
+        slots=slots,
+        system_prompt=system_prompt,
+    )
+    text = await _complete_router(chat, repair_messages, model)
     return parse_router_decision(text)

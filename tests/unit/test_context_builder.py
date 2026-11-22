@@ -9,7 +9,11 @@ from app.context.builder import build_context_pack
 from app.context.formatters import format_slots, format_tool_facts
 from app.prompts.answer import build_answer_pack, build_order_tool_answer_pack
 from app.prompts.chitchat import build_chitchat_pack
-from app.prompts.router import build_router_pack
+from app.prompts.router import (
+    ROUTER_OUTPUT_SUFFIX,
+    build_router_messages,
+    build_router_pack,
+)
 from app.prompts.tool_planner import build_tool_planner_pack
 
 
@@ -118,6 +122,27 @@ def test_router_pack_uses_readable_slots_and_recent_history():
     assert '"order_no": "ORD-1001"' not in system
     assert pack.manifest.history_turns == 2
     assert pack.manifest.history_messages == 4
+
+
+def test_router_messages_anchor_json_constraint_on_last_user_turn():
+    context_pack_messages = build_router_messages(
+        _history(2),
+        "这个订单呢",
+        slots={"order_no": "ORD-1001"},
+        settings=_settings(),
+    )
+    legacy_messages = build_router_messages(
+        _history(2),
+        "这个订单呢",
+        slots={"order_no": "ORD-1001"},
+        settings=_settings(context_engine_enabled=False),
+    )
+
+    assert context_pack_messages[-1] == {
+        "role": "user",
+        "content": f"这个订单呢{ROUTER_OUTPUT_SUFFIX}",
+    }
+    assert legacy_messages[-1] == context_pack_messages[-1]
 
 
 def test_tool_planner_pack_does_not_include_business_evidence():
