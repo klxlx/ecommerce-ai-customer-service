@@ -32,6 +32,7 @@ class AgentState(TypedDict, total=False):
     sources: list[dict[str, Any]]
     tool_evidence: dict[str, Any]
     fc: dict[str, Any]
+    context_manifest: dict[str, Any] | None
     grounding_context: str
     after_sale_context: dict[str, Any] | None
     chit_chat_streak: int

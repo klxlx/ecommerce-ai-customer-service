@@ -63,6 +63,7 @@ async def _evaluate(cases_path: Path) -> int:
             case.get("history", []),
             case["message"],
             slots=case.get("slots", {}),
+            settings=settings,
         )
         try:
             plan = await run_order_tool_loop(

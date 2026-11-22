@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
+from typing import Any
 
+from app.context.builder import build_context_pack, context_engine_enabled
+from app.context.models import ContextPack
 from app.services.tone import DATASET_TONE_GUIDE
 
 CHITCHAT_SYSTEM = """你是电商客服系统中的闲聊 Agent，只负责寒暄、天气和本地时间等轻量交流，不处理订单、售后、商品价格、库存等业务查询。
@@ -40,14 +44,49 @@ CHITCHAT_SYSTEM = """你是电商客服系统中的闲聊 Agent，只负责寒�
 """
 
 
+def _base_system() -> str:
+    return f"{CHITCHAT_SYSTEM}\n\n{DATASET_TONE_GUIDE}"
+
+
+def build_chitchat_pack(
+    history: list[dict],
+    user_message: str,
+    tool_facts: Mapping[str, Any] | None = None,
+    *,
+    settings: Any | None = None,
+) -> ContextPack:
+    """Build a small-model prompt with compact weather facts."""
+    return build_context_pack(
+        purpose="chitchat_answer",
+        system_prompt=_base_system(),
+        history=history,
+        user_message=user_message,
+        tool_evidence=tool_facts,
+        settings=settings,
+        tool_label="工具事实",
+    )
+
+
 def build_chitchat_messages(
     history: list[dict],
     user_message: str,
-    tool_facts: dict | None = None,
+    tool_facts: Mapping[str, Any] | None = None,
+    *,
+    settings: Any | None = None,
+    context_pack: ContextPack | None = None,
 ) -> list[dict]:
+    if context_pack is not None:
+        return context_pack.to_messages()
+    if context_engine_enabled(settings):
+        return build_chitchat_pack(
+            history,
+            user_message,
+            tool_facts,
+            settings=settings,
+        ).to_messages()
+
     system_content = (
-        f"{CHITCHAT_SYSTEM}\n\n"
-        f"{DATASET_TONE_GUIDE}\n\n"
+        f"{_base_system()}\n\n"
         f"工具事实：\n{json.dumps(tool_facts or {}, ensure_ascii=False)}"
     )
     messages: list[dict] = [{"role": "system", "content": system_content}]

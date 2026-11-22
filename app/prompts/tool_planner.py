@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import Any
+
+from app.context.builder import build_context_pack, context_engine_enabled
+from app.context.models import ContextPack
 
 TOOL_PLANNER_SYSTEM = """你是电商客服的订单查询工具规划器。
 你的唯一任务是决定是否调用一个只读订单工具，以及填写参数；不要生成给顾客的最终回复。
@@ -21,12 +25,42 @@ TOOL_PLANNER_SYSTEM = """你是电商客服的订单查询工具规划器。
 6. 参数不完整或不确定时不要调用工具，让现有澄清流程处理。"""
 
 
+def build_tool_planner_pack(
+    history: list[dict[str, Any]],
+    user_message: str,
+    *,
+    slots: Mapping[str, Any] | None = None,
+    settings: Any | None = None,
+) -> ContextPack:
+    """Build a bounded planner prompt; tools stay in the provider schema."""
+    return build_context_pack(
+        purpose="tool_planner",
+        system_prompt=TOOL_PLANNER_SYSTEM,
+        history=history,
+        user_message=user_message,
+        slots=slots,
+        settings=settings,
+    )
+
+
 def build_tool_planner_messages(
     history: list[dict[str, Any]],
     user_message: str,
     *,
-    slots: dict[str, Any] | None = None,
+    slots: Mapping[str, Any] | None = None,
+    settings: Any | None = None,
+    context_pack: ContextPack | None = None,
 ) -> list[dict[str, Any]]:
+    if context_pack is not None:
+        return context_pack.to_messages()
+    if context_engine_enabled(settings):
+        return build_tool_planner_pack(
+            history,
+            user_message,
+            slots=slots,
+            settings=settings,
+        ).to_messages()
+
     system = TOOL_PLANNER_SYSTEM
     if slots:
         system += (

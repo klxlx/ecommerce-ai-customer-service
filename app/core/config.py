@@ -209,6 +209,42 @@ class Settings(BaseSettings):
         default="", validation_alias="FC_PLANNER_MODEL"
     )
 
+    # Deterministic context assembly. Disabled by default so the existing
+    # prompt path remains a one-flag rollback.
+    context_engine_enabled: bool = Field(
+        default=False, validation_alias="CONTEXT_ENGINE_ENABLED"
+    )
+    context_max_chars: int = Field(
+        default=6000,
+        ge=1000,
+        le=50000,
+        validation_alias="CONTEXT_MAX_CHARS",
+    )
+    context_history_turns: int = Field(
+        default=6,
+        ge=1,
+        le=20,
+        validation_alias="CONTEXT_HISTORY_TURNS",
+    )
+    context_history_max_chars: int = Field(
+        default=3000,
+        ge=200,
+        le=20000,
+        validation_alias="CONTEXT_HISTORY_MAX_CHARS",
+    )
+    context_tool_facts_max_chars: int = Field(
+        default=1200,
+        ge=100,
+        le=8000,
+        validation_alias="CONTEXT_TOOL_FACTS_MAX_CHARS",
+    )
+    context_slots_max_chars: int = Field(
+        default=300,
+        ge=50,
+        le=2000,
+        validation_alias="CONTEXT_SLOTS_MAX_CHARS",
+    )
+
     # App
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     mock_providers: bool = Field(default=False, validation_alias="MOCK_PROVIDERS")

@@ -12,6 +12,7 @@ import json
 import re
 from decimal import Decimal, InvalidOperation
 
+from app.context.builder import context_engine_enabled
 from app.core.errors import ProviderError
 from app.core.resilience import ResiliencePolicy, execute_stream_with_resilience
 from app.graph.router import (
@@ -33,9 +34,11 @@ from app.graph.tool_planner import run_order_tool_loop
 from app.prompts.answer import (
     KNOWLEDGE_GAP_MARKER,
     build_answer_messages,
+    build_answer_pack,
     build_order_tool_answer_messages,
+    build_order_tool_answer_pack,
 )
-from app.prompts.chitchat import build_chitchat_messages
+from app.prompts.chitchat import build_chitchat_messages, build_chitchat_pack
 from app.prompts.tool_planner import build_tool_planner_messages
 from app.schemas.after_sales import AfterSaleFact
 from app.schemas.catalog import AmbiguousProduct, ProductFact
@@ -478,6 +481,7 @@ async def route_node(state: AgentState) -> dict:
         slots=existing_slots,
         model=getattr(router_agent, "model", None),
         system_prompt=getattr(router_agent, "system_prompt", None),
+        settings=state.get("settings"),
     )
     if decision is None:
         return {
@@ -538,13 +542,27 @@ async def knowledge_node(state: AgentState) -> dict:
     current = state.get("user_message", "").strip()
     if not _KNOWLEDGE_FOLLOW_UP_PATTERN.search(current):
         history = []
-    messages = build_answer_messages(
-        history,
-        current,
-        result.context,
-        "",
-        system_prompt=getattr(knowledge_agent, "system_prompt", None),
-    )
+    settings = state.get("settings")
+    context_manifest = None
+    if context_engine_enabled(settings):
+        pack = build_answer_pack(
+            history,
+            current,
+            result.context,
+            slots=state.get("slots", {}),
+            system_prompt=getattr(knowledge_agent, "system_prompt", None),
+            settings=settings,
+        )
+        messages = pack.to_messages()
+        context_manifest = pack.manifest.as_dict()
+    else:
+        messages = build_answer_messages(
+            history,
+            current,
+            result.context,
+            "",
+            system_prompt=getattr(knowledge_agent, "system_prompt", None),
+        )
     model = getattr(knowledge_agent, "model", None)
     answer = await _complete_answer(
         state,
@@ -575,6 +593,7 @@ async def knowledge_node(state: AgentState) -> dict:
         "sources": [s.__dict__ for s in result.sources],
         "grounding_context": result.context,
         "tool_evidence": {"kb_type": kb_type, "parent_ids": result.parent_ids},
+        "context_manifest": context_manifest,
     }
 
 
@@ -706,6 +725,7 @@ async def order_fc_node(state: AgentState) -> dict:
         state.get("history", []),
         state.get("user_message", ""),
         slots=state.get("slots", {}),
+        settings=settings,
     )
     try:
         plan = await run_order_tool_loop(
@@ -732,14 +752,26 @@ async def order_fc_node(state: AgentState) -> dict:
         result["fc"] = plan.trace()
         return result
 
-    evidence_text = json.dumps(
-        plan.evidence, ensure_ascii=False, default=str
-    )
-    answer_messages = build_order_tool_answer_messages(
-        state.get("history", []),
-        state.get("user_message", ""),
-        evidence_text,
-    )
+    context_manifest = None
+    if context_engine_enabled(settings):
+        pack = build_order_tool_answer_pack(
+            state.get("history", []),
+            state.get("user_message", ""),
+            plan.evidence,
+            slots=state.get("slots", {}),
+            settings=settings,
+        )
+        answer_messages = pack.to_messages()
+        context_manifest = pack.manifest.as_dict()
+    else:
+        evidence_text = json.dumps(
+            plan.evidence, ensure_ascii=False, default=str
+        )
+        answer_messages = build_order_tool_answer_messages(
+            state.get("history", []),
+            state.get("user_message", ""),
+            evidence_text,
+        )
     knowledge_agent = getattr(state.get("agents"), "knowledge", None)
     answer_model = getattr(knowledge_agent, "model", None)
     try:
@@ -764,6 +796,7 @@ async def order_fc_node(state: AgentState) -> dict:
         "answer": answer,
         "tool_evidence": plan.evidence,
         "fc": plan.trace(),
+        "context_manifest": context_manifest,
     }
 
 
@@ -1170,11 +1203,23 @@ async def chitchat_node(state: AgentState) -> dict:
             "tool_evidence": {"local_time": local_time_fact},
         }
 
-    messages = build_chitchat_messages(
-        state.get("history", []),
-        user_message,
-        facts,
-    )
+    settings = state.get("settings")
+    context_manifest = None
+    if context_engine_enabled(settings):
+        pack = build_chitchat_pack(
+            state.get("history", []),
+            user_message,
+            facts,
+            settings=settings,
+        )
+        messages = pack.to_messages()
+        context_manifest = pack.manifest.as_dict()
+    else:
+        messages = build_chitchat_messages(
+            state.get("history", []),
+            user_message,
+            facts,
+        )
     model = getattr(chitchat_agent, "model", None)
     answer = await _complete_answer(state, messages, model=model, max_chars=200)
     answer = _truncate_at_sentence(answer, 200)
@@ -1184,6 +1229,7 @@ async def chitchat_node(state: AgentState) -> dict:
     result = {
         "answer": answer,
         "chit_chat_streak": streak + 1,
+        "context_manifest": context_manifest,
     }
     if tool_evidence:
         result["tool_evidence"] = tool_evidence

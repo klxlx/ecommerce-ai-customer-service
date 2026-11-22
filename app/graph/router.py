@@ -159,6 +159,7 @@ async def route(
     slots: dict | None = None,
     model: str | None = None,
     system_prompt: str | None = None,
+    settings=None,
 ) -> RouterDecision | None:
     """Call the chat model to classify intent; return None on failure."""
     messages = build_router_messages(
@@ -166,6 +167,7 @@ async def route(
         user_message,
         slots=slots,
         system_prompt=system_prompt,
+        settings=settings,
     )
     if model:
         text = await chat.complete(messages, model=model)
