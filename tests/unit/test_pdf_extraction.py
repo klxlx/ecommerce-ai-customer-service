@@ -26,7 +26,7 @@ def test_huawei_outline_extraction_preserves_pages_and_section_paths():
         "HUAWEI Pura 70 Pro 用户指南-(HBN-AL00,HarmonyOS 5.0_01,zh-cn).pdf"
     )
 
-    document = extract_pdf(source, ROOT / "电商知识库文档")
+    document = extract_pdf(source, ROOT / "data" / "knowledge" / "pdf_sources")
 
     assert document.checksum == source.checksum
     assert document.page_count == source.page_count
@@ -46,7 +46,7 @@ def test_huawei_outline_extraction_preserves_pages_and_section_paths():
 def test_jd_policy_extraction_splits_chapters_sections_and_articles():
     source = _source("京东开放平台售后服务管理规则.pdf")
 
-    document = extract_pdf(source, ROOT / "电商知识库文档")
+    document = extract_pdf(source, ROOT / "data" / "knowledge" / "pdf_sources")
 
     assert len(document.parents) >= 20
     assert all(
@@ -68,7 +68,7 @@ def test_all_registered_pdfs_extract_with_traceable_metadata():
     sources = load_pdf_sources(REGISTRY_PATH)
 
     for source in sources:
-        document = extract_pdf(source, ROOT / "电商知识库文档")
+        document = extract_pdf(source, ROOT / "data" / "knowledge" / "pdf_sources")
         assert document.checksum == source.checksum
         assert document.page_count == source.page_count
         assert document.parents
@@ -85,4 +85,4 @@ def test_extractor_rejects_checksum_mismatch():
     tampered = replace(source, checksum="0" * 64)
 
     with pytest.raises(ValueError, match="checksum"):
-        extract_pdf(tampered, ROOT / "电商知识库文档")
+        extract_pdf(tampered, ROOT / "data" / "knowledge" / "pdf_sources")

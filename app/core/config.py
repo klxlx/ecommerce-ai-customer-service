@@ -24,12 +24,12 @@ class Settings(BaseSettings):
     )
 
     # Chat provider (OpenAI-compatible)
-    chat_model: str = Field(default="qwen-plus", validation_alias="CHAT_MODEL")
+    chat_model: str = Field(default="qwen-flash", validation_alias="CHAT_MODEL")
     router_model: str = Field(
-        default="qwen-plus", validation_alias="ROUTER_MODEL"
+        default="qwen-flash", validation_alias="ROUTER_MODEL"
     )
     knowledge_model: str = Field(
-        default="qwen-max", validation_alias="KNOWLEDGE_MODEL"
+        default="qwen-flash", validation_alias="KNOWLEDGE_MODEL"
     )
     chitchat_model: str = Field(
         default="qwen-flash", validation_alias="CHITCHAT_MODEL"

@@ -32,20 +32,18 @@ frontend/.playwright/
 .DS_Store
 Thumbs.db
 
-# Docker
+# Runtime logs and temporary files
+logs/
 *.log
+*.tmp
+*.bak
 
-# Local archive pending deletion review
+# Local acceptance artifacts and archived copies
+artifacts/
 待确认归档/
 
-# Local acceptance artifacts (contain embedded PostgreSQL data dirs, ~800MB)
-artifacts/
-
-# Windows PowerShell redirection leftover (empty file)
-$null
-
-# Large binary knowledge sources (130MB PDFs) kept out of git history
-电商知识库文档/
+# Large binary knowledge sources (PDFs are downloaded/kept locally only)
+data/knowledge/pdf_sources/
 
 # Local vision weights (download separately, not committed)
 models/*.onnx
@@ -54,7 +52,7 @@ models/*.pt
 # Customer return photos are runtime data and may contain PII
 data/return_images/
 
-# Raw third-party datasets (~310MB; may contain PII). Only derived,
+# Raw third-party datasets (~370MB; may contain PII). Only derived,
 # sanitized evaluation assets under data/eval belong in git.
 生成器/
 多场景数据集/
@@ -62,3 +60,6 @@ data/return_images/
 物流查询数据集/
 多轮对话数据集/
 商品回复数据集/
+
+# Internal agent planning notes (not part of the public project docs)
+docs/superpowers/

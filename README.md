@@ -2,17 +2,23 @@
 
 一套可落地演示的电商场景智能客服系统，以「静态知识检索 + 动态数据查询」双引擎为核心，
 采用父子块分层 RAG 架构，基于 LangGraph 实现全链路智能编排。覆盖商品咨询、交易规则查询、
-订单进度查询三大核心业务，支持多轮对话记忆、闲聊管控与人工兜底。
+订单进度查询、订单列表、售后进度与拍照退换货等业务，支持多轮对话记忆、上下文工程、
+只读 Function Calling、闲聊管控与人工兜底。
 
-- 顾客端：`/app` —— 登录、多轮对话、来源溯源、转人工
-- 管理端：`/admin` —— 工单队列（只看状态与流转）、客服回复工作台、知识库、运行日志
+- 顾客端：`/app` —— 登录、多轮对话、来源溯源、订单卡片、退货卡片、转人工
+- 管理端：`/admin` —— 工单队列、客服回复工作台、知识库、运行日志
 - 健康检查：`GET /health`
+
+![系统架构与兜底机制](docs/系统架构与兜底机制.png)
+
+> 默认配置保持 `CONTEXT_ENGINE_ENABLED=0`、`FC_READONLY_ENABLED=0`，便于回滚；
+> 两个开关打开后分别启用统一 Context Pack 和订单只读 Function Calling，写操作仍走确定性流程。
 
 ## 技术栈
 
 - 后端：Python 3.14、FastAPI、LangChain、LangGraph、SQLAlchemy 2、Alembic、psycopg 3
 - 数据库：PostgreSQL 16 + PGVector（1024 维向量）
-- 模型：OpenAI 兼容对话模型（默认 `qwen-plus`）、DashScope `text-embedding-v4`、`text-rerank-v1`
+- 模型：OpenAI 兼容对话模型（默认 `qwen-flash`）、DashScope `text-embedding-v4`、`text-rerank-v1`
 - 前端：React 19、TypeScript、Vite、React Router、TanStack Query、Lucide React
 
 ## 快速开始
@@ -91,7 +97,20 @@ Proactor 事件循环与异步 psycopg 不兼容）。不需要 `--reload`；修
 流式回复在 Provider 空闲超时或整轮预算超时后转人工兜底；如果最终答案与已发送 token
 不一致，SSE 会发送 `replace` 事件让前端整体替换气泡，而不是追加。
 
-## MVP：SSE 心跳、哨兵、拍照退换货与语义缓存
+## 关键配置
+
+配置全部通过环境变量或 `.env` 注入，完整模板见 `.env.example`。
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `MOCK_PROVIDERS` | `1` | `1` 使用内置确定性 Mock 模型，无需 API Key；接真实模型时改为 `0` |
+| `CONTEXT_ENGINE_ENABLED` | `0` | 打开后使用统一 Context Pack；关闭则走旧 Prompt 路径，用于回滚 |
+| `FC_READONLY_ENABLED` | `0` | 打开后订单/物流意图启用只读 Function Calling，写操作不进入 FC |
+| `SENTINEL_ENABLED` | `1` | 回答生成后的异步事实/承诺哨兵，异常时 fail-open |
+| `SEMANTIC_CACHE_ENABLED` | `1` | 人工导入 FAQ 的语义缓存，动态订单/价格/库存问题自动跳过 |
+| `STREAM_RETRY_ENABLED` | `1` | 流式首 token 前失败自动重试；已出 token 后改为非流式重生成并替换气泡 |
+
+## 功能细节：SSE、哨兵、拍照退换货与语义缓存
 
 ### SSE 心跳与网关超时
 
@@ -142,6 +161,18 @@ Proactor 事件循环与异步 psycopg 不兼容）。不需要 `--reload`；修
 Qwen-VL 或自训 YOLO 时实现相同的 `VisionAnalyzer.analyze()` 接口并改配置即可，API、
 数据库和前端表单无需改动。
 
+### 上下文工程与只读 Function Calling
+
+- `CONTEXT_ENGINE_ENABLED=1` 时，回答、路由、工具规划和闲聊四个 Prompt 共用统一的
+  Context Pack：系统规则、槽位白名单、工具事实、历史窗口和当前用户消息分别组装，
+  不再把整段会话历史或原始 JSON 直接拼进 Prompt。
+- 历史默认 6 轮 / 3000 字符，工具事实默认 1200 字符，槽位默认 300 字符；预算和截断
+  记录在 `agent_runs.trace.context` 的 manifest 中，便于排查“模型看到了什么”。
+- `FC_READONLY_ENABLED=1` 时，订单和物流意图可调用 `order_list`、`order_detail` 两个
+  只读工具；规划器不能传 `user_id`，也不能调用退款、取消、改地址、建工单等写操作。
+- 工具结果、规划失败和空结果都有确定性兜底；FC 的调用步骤、降级原因和工具结果写入
+  `agent_runs.trace.fc`。两个开关默认关闭，便于一键回滚到旧路径。
+
 ### 知识库重建（不删除原数据）
 
 - 入库失败原因先查 `knowledge_document_versions.failure_reason`。`embedding:quota_exceeded`
@@ -170,9 +201,9 @@ python -m scripts.rebuild_knowledge --skip-reembed   # 只重试失败文档
 - 导入方式：
 
 ```bash
-# 先按 data/semantic_cache_seed.example.json 准备 50–100 条
-python -m scripts.seed_semantic_cache --file data/semantic_cache_seed.json
-python -m scripts.seed_semantic_cache --file data/semantic_cache_seed.csv
+# 已审核的 100 条种子数据在 data/semantic_cache/faq_seed_100.csv
+python -m scripts.seed_semantic_cache --file data/semantic_cache/faq_seed_100.csv
+python -m scripts.seed_semantic_cache --file data/semantic_cache/faq_candidates_100.csv
 python -m scripts.seed_semantic_cache --clear
 ```
 
@@ -198,14 +229,55 @@ cd frontend && npm run build      # 前端类型检查 + 构建
 
 ## 目录结构
 
-```
-app/             FastAPI 应用（core/db/api/services/rag/graph/tools/providers）
-migrations/      Alembic 迁移
-data/knowledge/  知识库清单与商品/规则文档
-scripts/         索引、演示数据、评测脚本
+```text
+app/             FastAPI 应用
+  agents/        客服角色配置
+  api/           路由与鉴权
+  context/       Context Pack、预算与事实格式化
+  core/          配置、日志、指标、限流、韧性
+  db/            模型与仓储
+  graph/         LangGraph 节点、路由、状态与工具规划
+  prompts/       回答、路由、工具规划、闲聊 Prompt
+  providers/     对话/向量/重排/Mock Provider
+  rag/           父子块检索、PDF 抽取、索引
+  schemas/       Pydantic 契约
+  services/      聊天、工单、售后、知识库、哨兵、评价
+  tools/         只读工具与运行时
 frontend/        React 前端（顾客端 + 管理端）
+migrations/      Alembic 迁移
+data/
+  knowledge/     知识库清单、商品/规则文档、PDF 来源清单
+  eval/          脱敏后的意图/工具/哨兵评测资产
+  semantic_cache/ FAQ 候选与种子数据
+scripts/         索引、演示数据、评测、启动脚本
 tests/           后端单元/集成/端到端测试
-docs/            架构与演示指南
+docs/            架构、演示指南、流程图与运维配置
+models/          视觉模型目录（权重本地下载，不提交）
 ```
 
 详见 `docs/architecture.md` 与 `docs/demo-guide.md`。
+
+## 数据与本地资产
+
+仓库只提交源码、迁移、派生评测资产和文档。以下内容仅在本地保留，已在 `.gitignore`
+中排除，不会进入 Git：
+
+- `.env`：真实 API Key 与数据库连接，不要把 `.env` 或压缩包直接上传到公开仓库。
+- `.venv/`、`frontend/node_modules/`、`frontend/dist/`：本地运行/构建产物。
+- `models/*.onnx`、`models/*.pt`：YOLO 权重，按 `README` 说明放到 `models/` 即可。
+- `data/knowledge/pdf_sources/`：大体量 PDF 原始文件，清单见
+  `data/knowledge/pdf_sources.json`；仓库只保留 Markdown 知识条目和清单。
+- `data/return_images/`、`logs/`、`artifacts/`：运行时图片、日志和验收产物。
+- 原始第三方数据集与生成器：只保留 `data/eval/` 下脱敏后的派生资产。
+
+## 上传仓库前检查
+
+```bash
+git status --short                 # 应为干净工作区
+git ls-files --others --exclude-standard   # 应无未忽略的临时文件
+git ls-files | wc -l               # 确认提交文件数量符合预期
+```
+
+如果通过压缩整个目录上传，请先排除 `.env`、`.venv`、`frontend/node_modules`、
+`frontend/dist`、`data/knowledge/pdf_sources`、`data/return_images`、`models/*.onnx`
+和 `logs`，避免泄露密钥或把本地环境打进仓库。

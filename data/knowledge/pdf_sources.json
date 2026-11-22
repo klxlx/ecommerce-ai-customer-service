@@ -1,6 +1,6 @@
 {
   "registry_version": 1,
-  "pdf_root": "电商知识库文档",
+  "pdf_root": "data/knowledge/pdf_sources",
   "generated_at": "2026-11-18",
   "sources": [
     {
