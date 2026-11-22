@@ -67,8 +67,12 @@ def _settings():
     )
 
 
-def _container(chat):
+def _container(chat, *, context_engine: bool = False):
     settings = _settings()
+    if context_engine:
+        settings = settings.model_copy(
+            update={"context_engine_enabled": True}
+        )
     return Container(
         chat=chat,
         providers=Providers(embeddings=FakeEmbeddings(), rerank=FakeReranker()),
@@ -155,6 +159,48 @@ async def test_order_list_uses_native_tool_call_and_records_evidence(db_session)
     assert trace["fc"]["fallback_reason"] is None
     assert trace["fc"]["tool_calls"][0]["name"] == "order_list"
     assert len(trace["tool_evidence"]["orders"]) == 2
+
+
+@pytest.mark.anyio
+async def test_order_fc_records_context_manifest_when_enabled(db_session):
+    user = await create_user(db_session, "fc-context-user")
+    await create_order(
+        db_session,
+        user.id,
+        "ORD-7051",
+        status="已发货",
+        items=[("测试商品F", 1, "77.00")],
+    )
+    chat = OrderToolChat(
+        route={
+            "intent": "order",
+            "slots": {"order_no": "ORD-7051"},
+        },
+        plan=[_call("order_detail", {"order_no": "ORD-7051"})],
+        answer="订单 ORD-7051 已发货。",
+    )
+    container = _container(chat, context_engine=True)
+    async with await _client(container) as client:
+        token = await _login(client, "fc-context-user")
+        conversation = (
+            await client.post(
+                "/api/conversations", json={}, headers=_auth(token)
+            )
+        ).json()
+        response = await client.post(
+            f"/api/conversations/{conversation['id']}/messages",
+            json={"content": "查 ORD-7051"},
+            headers=_auth(token),
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    run = await _load_run(body["trace_id"])
+    context = run.trace["context"]
+    assert context["purpose"] == "order_answer"
+    assert context["tool_sections"] == ["order"]
+    assert context["history_messages"] == 0
+    assert context["history_messages_dropped"] >= 1
 
 
 @pytest.mark.anyio
