@@ -1,13 +1,13 @@
 # 数据集评测基线（qwen-plus 历史版）
 
-> 当前可用基线见 `artifacts/eval-dataset-qwen-max-flash.md`：router=qwen-max，意图 295/300=98.3%；chat/sentinel=qwen-flash，工具首动作 100%、动作集合 45%、哨兵负样本拦截 70%。本文件保留 qwen-plus 配额耗尽前的历史结果，便于对比。
+> 本文件保留 qwen-plus 配额耗尽前的历史结果，便于对比。后续 qwen-max/flash 的评测记录未随仓库保留，需要本地复跑生成。
 
 - 生成时间：2026-11-21T06:24:32+00:00
 - 模型：router=qwen-plus，chat=qwen-plus，sentinel=qwen-plus
 - 数据版本：seed=20261121
 - 数据量：intent 300、tool 200、sentinel 50 负 + 50 正、FAQ 100
 
-> 备注：本报告来自 qwen-plus 配额耗尽前的完整运行。之后复跑时 DashScope 聊天模型返回 HTTP 403 `Free quota exhausted`，因此没有用失败数据覆盖本报告。失败日志保留在 `artifacts/eval-dataset-provider-quota-error.json`。
+> 备注：本报告来自 qwen-plus 配额耗尽前的完整运行。之后复跑时 DashScope 聊天模型返回 HTTP 403 `Free quota exhausted`，因此没有用失败数据覆盖本报告；失败日志未随仓库保留。
 
 ## 意图识别
 

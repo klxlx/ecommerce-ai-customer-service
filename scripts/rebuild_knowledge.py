@@ -45,7 +45,7 @@ from app.rag.indexer import index_extracted_documents
 from app.rag.pdf_extraction import PdfSource, extract_pdf
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-PDF_ROOT = PROJECT_ROOT / "电商知识库文档"
+PDF_ROOT = PROJECT_ROOT / "data" / "knowledge" / "pdf_sources"
 CHUNK_BATCH = 10
 ACTIVE_HANDOFF_STATUSES = {"open", "in_progress"}
 

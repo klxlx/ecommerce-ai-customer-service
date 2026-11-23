@@ -26,7 +26,7 @@ PY
 echo "Running migrations..."
 alembic upgrade head
 
-echo "Seeding demo data and indexing knowledge..."
+echo "Seeding demo data and Markdown knowledge..."
 python -m scripts.seed_demo
 
 echo "Starting uvicorn..."

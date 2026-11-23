@@ -4,8 +4,13 @@ Idempotent: existing users/products/orders are skipped. Run with:
 
     python -m scripts.seed_demo
 
-Set ``SEED_INDEX_KNOWLEDGE=0`` to skip PDF indexing (useful when you only need
-business data and do not want to wait for the 1800-page policy PDFs).
+By default this indexes the small Markdown demo bundle. Set
+``SEED_DEMO_KNOWLEDGE=0`` to skip it.
+
+The large PDF registry is optional. Set ``SEED_INDEX_KNOWLEDGE=1`` to also
+index it; missing PDFs are reported as warnings and never block application
+startup. Run ``python -m scripts.index_knowledge`` when a strict PDF-index exit
+code is required.
 """
 
 from __future__ import annotations
@@ -34,10 +39,14 @@ from app.db.models import (
     User,
 )
 from app.db.session import create_session_factory
-from app.rag.indexer import index_registered_pdfs
+from app.rag.indexer import (
+    index_registered_markdowns,
+    index_registered_pdfs,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PDF_REGISTRY_PATH = PROJECT_ROOT / "data" / "knowledge" / "pdf_sources.json"
+DEMO_REGISTRY_PATH = PROJECT_ROOT / "data" / "knowledge" / "demo_sources.json"
 
 # username -> role; every demo account uses the password ``password123``.
 DEMO_USERS = (
@@ -278,19 +287,35 @@ async def _seed_after_sales(session, orders: dict[str, Order]) -> None:
     await session.commit()
 
 
+def _env_flag(name: str, *, default: bool) -> bool:
+    fallback = "1" if default else "0"
+    raw = os.getenv(name, fallback).strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 async def main() -> int:
     settings = get_settings()
     container = build_container(settings)
     factory = create_session_factory(settings.database_url)
-    index_knowledge = os.getenv("SEED_INDEX_KNOWLEDGE", "1") == "1"
-    result = None
+    seed_demo_knowledge = _env_flag("SEED_DEMO_KNOWLEDGE", default=True)
+    index_pdfs = _env_flag("SEED_INDEX_KNOWLEDGE", default=False)
+    demo_result = None
+    pdf_result = None
     async with factory() as session:
         users = await _seed_users(session)
         products = await _seed_products(session)
         orders = await _seed_orders(session, users, products)
         await _seed_after_sales(session, orders)
-        if index_knowledge:
-            result = await index_registered_pdfs(
+        if seed_demo_knowledge:
+            demo_result = await index_registered_markdowns(
+                session,
+                container.providers.embeddings,
+                DEMO_REGISTRY_PATH,
+                project_root=PROJECT_ROOT,
+                embedding_model=settings.embedding_model,
+            )
+        if index_pdfs:
+            pdf_result = await index_registered_pdfs(
                 session,
                 container.providers.embeddings,
                 PDF_REGISTRY_PATH,
@@ -298,20 +323,27 @@ async def main() -> int:
                 embedding_model=settings.embedding_model,
             )
 
+    total_chunks = (
+        (demo_result.chunks_indexed if demo_result else 0)
+        + (pdf_result.chunks_indexed if pdf_result else 0)
+    )
     print(
         f"seeded users={len(users)} products={len(products)} "
-        f"orders={len(orders)} knowledge_documents="
-        f"{result.documents_seen if result else 0} "
-        f"indexed={result.documents_indexed if result else 0} "
-        f"skipped={result.documents_skipped if result else 0} "
-        f"versions={result.versions_published if result else 0} "
-        f"chunks={result.chunks_indexed if result else 0} "
-        f"errors={len(result.errors) if result else 0}"
+        f"orders={len(orders)} "
+        f"demo_documents={demo_result.documents_seen if demo_result else 0} "
+        f"demo_indexed={demo_result.documents_indexed if demo_result else 0} "
+        f"demo_skipped={demo_result.documents_skipped if demo_result else 0} "
+        f"pdf_documents={pdf_result.documents_seen if pdf_result else 0} "
+        f"pdf_indexed={pdf_result.documents_indexed if pdf_result else 0} "
+        f"pdf_skipped={pdf_result.documents_skipped if pdf_result else 0} "
+        f"chunks={total_chunks}"
     )
-    if result:
+    for label, result in (("demo", demo_result), ("pdf", pdf_result)):
+        if result is None:
+            continue
         for error in result.errors:
-            print(f"  ERROR {error}", file=sys.stderr)
-    return 1 if result and result.errors else 0
+            print(f"  WARN {label}: {error}", file=sys.stderr)
+    return 0
 
 
 if __name__ == "__main__":

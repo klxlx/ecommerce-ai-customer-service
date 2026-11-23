@@ -23,6 +23,7 @@ from tests.fakes import FakeEmbeddings
 
 ROOT = Path(__file__).resolve().parents[2]
 REGISTRY_PATH = ROOT / "data" / "knowledge" / "pdf_sources.json"
+DEMO_REGISTRY_PATH = ROOT / "data" / "knowledge" / "demo_sources.json"
 
 
 def _document(
@@ -462,3 +463,37 @@ async def test_registered_pdf_entrypoint_reports_bad_source_and_continues(
     assert await db_session.scalar(select(func.count(KnowledgeDocument.id))) == 1
     document = await _one(db_session, KnowledgeDocument)
     assert document.source_key == "jd-lightning-refund"
+
+
+@pytest.mark.anyio
+async def test_registered_markdown_entrypoint_indexes_demo_bundle(db_session):
+    result = await indexer_module.index_registered_markdowns(
+        db_session,
+        FakeEmbeddings(),
+        DEMO_REGISTRY_PATH,
+        project_root=ROOT,
+        embedding_model="fake-1024",
+        chunk_size=64,
+        overlap=12,
+    )
+
+    assert result.documents_seen == 8
+    assert result.documents_indexed == 8
+    assert result.versions_published == 8
+    assert result.errors == []
+
+    documents = (
+        await db_session.execute(select(KnowledgeDocument))
+    ).scalars().all()
+    versions = (
+        await db_session.execute(select(KnowledgeDocumentVersion))
+    ).scalars().all()
+    chunks = (await db_session.execute(select(KnowledgeChunk))).scalars().all()
+
+    assert len(documents) == 8
+    assert len(versions) == 8
+    assert all(document.current_version_id is not None for document in documents)
+    assert all(document.source_kind == "text" for document in documents)
+    assert all(version.status == "published" for version in versions)
+    assert all(version.extraction_strategy == "markdown" for version in versions)
+    assert len(chunks) == result.chunks_indexed

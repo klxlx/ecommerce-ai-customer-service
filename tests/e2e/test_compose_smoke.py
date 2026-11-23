@@ -42,6 +42,19 @@ def test_app_startup_runs_migrations_and_seed():
     assert "seed_demo" in content
 
 
+def test_compose_defaults_to_demo_knowledge_without_pdfs():
+    compose = yaml.safe_load(_read("compose.yaml"))
+    app = compose["services"]["app"]
+    env = app["environment"]
+
+    assert env["SEED_DEMO_KNOWLEDGE"] == "${SEED_DEMO_KNOWLEDGE:-1}"
+    assert env["SEED_INDEX_KNOWLEDGE"] == "${SEED_INDEX_KNOWLEDGE:-0}"
+    assert any(
+        "data/knowledge/pdf_sources" in str(volume)
+        for volume in app.get("volumes", [])
+    )
+
+
 def test_app_serves_frontend_and_exposes_port():
     compose = yaml.safe_load(_read("compose.yaml"))
     ports = compose["services"]["app"].get("ports", [])

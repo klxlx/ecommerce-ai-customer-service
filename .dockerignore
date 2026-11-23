@@ -16,3 +16,14 @@ tests
 models/*.onnx
 models/*.pt
 data/return_images
+data/knowledge/pdf_sources
+artifacts
+logs
+待确认归档
+生成器
+多场景数据集
+售后维权数据集
+物流查询数据集
+多轮对话数据集
+商品回复数据集
+docs/superpowers

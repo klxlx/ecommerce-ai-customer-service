@@ -1,0 +1,71 @@
+{
+  "registry_version": 1,
+  "root": "data/knowledge",
+  "generated_at": "2026-11-24",
+  "sources": [
+    {
+      "source_id": "demo-product-earbuds-pro",
+      "file_name": "products/earbuds-pro.md",
+      "title": "声动 Pro 无线蓝牙耳机",
+      "kb_type": "product",
+      "applicability": "声动 Pro 无线蓝牙耳机（EB-PRO）",
+      "effective_date": null
+    },
+    {
+      "source_id": "demo-product-smart-thermos",
+      "file_name": "products/smart-thermos.md",
+      "title": "恒温智能保温杯",
+      "kb_type": "product",
+      "applicability": "恒温智能保温杯（TH-450）",
+      "effective_date": null
+    },
+    {
+      "source_id": "demo-product-power-bank",
+      "file_name": "products/power-bank.md",
+      "title": "疾充 10000mAh 便携充电宝",
+      "kb_type": "product",
+      "applicability": "疾充 10000mAh 便携充电宝（PB-10000）",
+      "effective_date": null
+    },
+    {
+      "source_id": "demo-product-air-purifier",
+      "file_name": "products/air-purifier.md",
+      "title": "清呼吸 家用空气净化器",
+      "kb_type": "product",
+      "applicability": "清呼吸 家用空气净化器（AP-320）",
+      "effective_date": null
+    },
+    {
+      "source_id": "demo-policy-return",
+      "file_name": "policies/return-policy.md",
+      "title": "退换货政策",
+      "kb_type": "policy",
+      "applicability": "平台自营商品退换货规则",
+      "effective_date": null
+    },
+    {
+      "source_id": "demo-policy-warranty",
+      "file_name": "policies/warranty-policy.md",
+      "title": "售后与保修政策",
+      "kb_type": "policy",
+      "applicability": "平台自营商品售后与保修规则",
+      "effective_date": null
+    },
+    {
+      "source_id": "demo-policy-shipping",
+      "file_name": "policies/shipping-policy.md",
+      "title": "物流与运费规则",
+      "kb_type": "policy",
+      "applicability": "平台订单物流与运费规则",
+      "effective_date": null
+    },
+    {
+      "source_id": "demo-policy-dispute",
+      "file_name": "policies/dispute-policy.md",
+      "title": "交易纠纷处理规则",
+      "kb_type": "policy",
+      "applicability": "平台交易纠纷处理规则",
+      "effective_date": null
+    }
+  ]
+}

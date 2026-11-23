@@ -79,12 +79,3 @@ def test_legacy_markdown_manifest_is_disabled_and_checksummed():
         path = base_dir / source["uri"]
         assert path.is_file(), source["uri"]
         assert _sha256(path) == source["checksum"], source["uri"]
-
-
-def test_legacy_audit_record_exists_in_chinese():
-    audit_path = ROOT / "ccb-docs" / "p3-legacy-knowledge-audit.md"
-    audit = audit_path.read_text(encoding="utf-8")
-
-    assert "旧 Markdown 知识审计" in audit
-    assert "不直接清空" in audit
-    assert "不参与正式检索" in audit

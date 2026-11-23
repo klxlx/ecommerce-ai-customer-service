@@ -34,7 +34,7 @@
 
 - 100 条中没有任何一条被判为 `chit_chat`。
 - 按“政策类 FAQ 应进 policy_knowledge、商品类 FAQ 应进 product_knowledge”的严格口径，有 17 条不一致；但其中多数是“退款到哪个账户、保修流程、物流查询”等操作性政策问题，路由到 after_sale/order/product_knowledge 在业务上并不错误，只是不完全是知识问答。
-- 完整逐条结果：`artifacts/faq-intent-routing.json`。
+- 逐条路由结果未随仓库保留；如需复核，可用 `scripts.eval_agent_dataset` 重新生成。
 
 ## 与 `CHIT_CHAT_LIMIT` 的关系
 

@@ -27,6 +27,10 @@ from app.rag.chunking import (
     split_parent_text,
 )
 from app.rag.embeddings import EmbeddingProvider
+from app.rag.markdown_extraction import (
+    extract_markdown,
+    load_markdown_registry,
+)
 from app.rag.pdf_extraction import (
     ExtractedDocument,
     extract_pdf,
@@ -172,6 +176,44 @@ async def index_registered_pdfs(
     for source in sources:
         try:
             documents.append(extract_pdf(source, pdf_root))
+        except Exception as exc:
+            result.errors.append(f"{source.source_id}: {_error_reason(exc)}")
+
+    ingestion = await index_extracted_documents(
+        session,
+        provider,
+        documents,
+        embedding_model=embedding_model,
+        chunk_size=chunk_size,
+        overlap=overlap,
+    )
+    result.documents_indexed = ingestion.documents_indexed
+    result.documents_skipped = ingestion.documents_skipped
+    result.versions_published = ingestion.versions_published
+    result.chunks_indexed = ingestion.chunks_indexed
+    result.errors.extend(ingestion.errors)
+    return result
+
+
+async def index_registered_markdowns(
+    session: AsyncSession,
+    provider: EmbeddingProvider,
+    registry_path: str | Path,
+    *,
+    project_root: str | Path,
+    embedding_model: str,
+    chunk_size: int = 400,
+    overlap: int = 80,
+) -> IndexResult:
+    """Extract and version the small Markdown bundle used for demo startup."""
+    registry_path = Path(registry_path)
+    registry = load_markdown_registry(registry_path)
+    knowledge_root = Path(project_root) / registry.root
+    result = IndexResult(documents_seen=len(registry.sources))
+    documents: list[ExtractedDocument] = []
+    for source in registry.sources:
+        try:
+            documents.append(extract_markdown(source, knowledge_root))
         except Exception as exc:
             result.errors.append(f"{source.source_id}: {_error_reason(exc)}")
 
