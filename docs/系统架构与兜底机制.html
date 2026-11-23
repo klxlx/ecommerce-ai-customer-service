@@ -13,8 +13,8 @@
     -webkit-font-smoothing: antialiased;
   }
   .page {
-    width: 1800px;
-    min-height: 1260px;
+    width: 1240px;
+    min-height: 900px;
     padding: 38px 48px 32px;
     background:
       radial-gradient(circle at 7% 0%, rgba(59,130,246,.12), transparent 28%),
@@ -59,11 +59,8 @@
   }
   .branch b { color: #2563eb; }
   .layout {
-    display: grid;
-    grid-template-columns: 1fr 524px;
-    gap: 28px;
+    display: block;
     margin-top: 22px;
-    align-items: start;
   }
   .left-head {
     display: flex;
@@ -336,19 +333,19 @@
 <div class="page">
   <div class="top">
     <div>
-      <div class="kicker">SYSTEM MAP / CURRENT STATE</div>
-      <h1>电商客服智能体 · 系统流程与兜底现状</h1>
-      <p class="subtitle">六层架构与一条主链路；右侧只标注三类兜底的真实边界。</p>
+      <div class="kicker">SYSTEM MAP / SIX LAYERS</div>
+      <h1>电商客服智能体 · 六层系统架构</h1>
+      <p class="subtitle">按调用顺序展示六层职责、关键目录与边界。</p>
     </div>
-    <div class="branch">分支 <b>feat/system-optimization</b> · HEAD <b>cb179fe</b></div>
+    <div class="branch">当前工作区 <b>feat/context-pack</b> · <b>2026-11-23</b></div>
   </div>
 
   <div class="layout">
     <main>
       <div class="left-head">
-        <span class="tag">REQUEST PATH</span>
-        <h2>从顾客消息到持久化回复</h2>
-        <p>细小流程以文字带过，不在图中展开</p>
+        <span class="tag">LAYER MAP</span>
+        <h2>从展示层到数据层</h2>
+        <p>上层依赖下层能力，异常向上归一到服务层</p>
       </div>
 
       <div class="layers">
@@ -439,90 +436,12 @@
           </div>
         </div>
       </div>
-
-      <div class="chain">
-        <div class="chain-head">
-          <span class="label">MAIN CHAIN</span>
-          <span class="note">一次普通问答的实际调用顺序</span>
-        </div>
-        <div class="steps">
-          <span class="step">POST /messages/stream</span><span class="arrow">→</span>
-          <span class="step">鉴权 / 限流</span><span class="arrow">→</span>
-          <span class="step">人工中检查</span><span class="arrow">→</span>
-          <span class="step">存 user</span><span class="arrow">→</span>
-          <span class="step">FAQ 缓存</span><span class="arrow">→</span>
-          <span class="step">LangGraph 路由</span><span class="arrow">→</span>
-          <span class="step">tools / RAG / LLM</span><span class="arrow">→</span>
-          <span class="step">哨兵校验</span><span class="arrow">→</span>
-          <span class="step">落库</span><span class="arrow">→</span>
-          <span class="step">SSE token / replace / done</span>
-        </div>
-      </div>
     </main>
-
-    <aside class="panel">
-      <div class="panel-head">
-        <div>
-          <h2>三类兜底</h2>
-          <p>只写代码里真实存在的机制</p>
-        </div>
-        <span class="stack-note">缺口即优化输入</span>
-      </div>
-
-      <section class="fb-card model">
-        <div class="fb-head">
-          <h3>模型失败 → 自动重试</h3>
-          <span class="badge partial">部分有</span>
-        </div>
-        <p class="fb-sub"><b>非流式有，流式没有。</b> 统一重试 / 熔断框架，预算按 provider 配置。</p>
-        <ul class="fb-list">
-          <li class="have"><b>有：</b><code>complete</code>（chat / embedding / rerank）走 <code>execute_with_resilience</code></li>
-          <li class="have">默认重试 <b>2 次</b>（共 3 次尝试），固定 <b>0.5s</b> 退避</li>
-          <li class="have">chat 30s/次、60s 总预算；embedding 20s/60s；rerank 15s/30s</li>
-          <li class="have">可重试：<b>timeout / connection / rate_limit</b>；auth / invalid / quota 不重试</li>
-          <li class="have">连续 <b>3 次</b>最终失败 → 熔断 <b>30s</b></li>
-          <li class="miss"><b>没有：</b>流式 <code>stream</code> 自动重试；只有 30s 空闲超时 + 60s 总预算</li>
-          <li class="have">chat 最终失败 → <code>PROVIDER_FAILURE_ANSWER</code> + 转人工工单</li>
-        </ul>
-      </section>
-
-      <section class="fb-card tool">
-        <div class="fb-head">
-          <h3>tool 故障 → 服务降级</h3>
-          <span class="badge ok">有基础降级</span>
-        </div>
-        <p class="fb-sub">工具失败不硬编事实，统一降到安全话术与人工。</p>
-        <ul class="fb-list">
-          <li class="have">知识检索异常 / 无结果 / 上下文不足 → <code>knowledge_gap</code> + 安全话术 + 工单</li>
-          <li class="have">商品、订单、售后查询异常 → <code>KNOWLEDGE_GAP_REPLY</code> + 转人工</li>
-          <li class="have">售后状态区分 <code>query_error</code> / <code>no_records</code> / <code>not_available</code></li>
-          <li class="have">FAQ 缓存异常 → 跳过缓存继续主链路；哨兵异常 → fail open</li>
-          <li class="miss"><b>没有：</b>备用数据源、静态知识兜底、工具级重试 / 熔断</li>
-        </ul>
-      </section>
-
-      <section class="fb-card break">
-        <div class="fb-head">
-          <h3>任务中断 → 断点回复</h3>
-          <span class="badge none">没有</span>
-        </div>
-        <p class="fb-sub"><b>没有 checkpoint、断点续跑或自动续答。</b></p>
-        <ul class="fb-list">
-          <li class="have">现有：SSE 心跳保活、知识回答先缓冲再输出、<code>replace</code> 覆盖气泡</li>
-          <li class="miss">前端未收到 <code>done</code> → “流式响应中断，请重试”；回拉历史后由用户重发</li>
-          <li class="miss">槽位续接（补订单号 / 商品名）只恢复澄清意图，不是任务断点恢复</li>
-        </ul>
-      </section>
-
-      <div class="panel-foot">
-        当前缺口：<b>流式模型调用无重试</b>、<b>工具无备用源</b>、<b>任务无断点</b>。这三项直接进入下一支线“系统优化”。
-      </div>
-    </aside>
   </div>
 
   <div class="foot">
     <span><strong>代码基线</strong> app/main.py · app/api/routes · app/services · app/graph · app/tools · app/rag · app/providers</span>
-    <span>2026-11-22 · 由现有代码与测试基线整理</span>
+    <span>2026-11-23 · 按当前工作区整理</span>
   </div>
 </div>
 </body>
