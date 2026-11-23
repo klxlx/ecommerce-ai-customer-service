@@ -39,6 +39,17 @@ curl http://127.0.0.1:8000/health
 `MOCK_PROVIDERS=1`（默认）表示使用内置确定性 Mock 模型，无需任何 API Key 即可跑通全流程。
 如需接入真实模型，设置 `CHAT_API_KEY`、`DASHSCOPE_API_KEY` 并将 `MOCK_PROVIDERS` 设为 `0` 即可。
 
+默认启动只索引仓库内的 8 份小型 Markdown 演示知识，不要求本地存在 PDF，适合直接
+`clone` 后演示。需要完整 PDF 知识库时，先把 PDF 放到 `data/knowledge/pdf_sources/`，
+再显式开启：
+
+```bash
+SEED_INDEX_KNOWLEDGE=1 docker compose up --build -d
+```
+
+缺少 PDF 时只会在 `docker compose logs app` 中打印警告，不会阻断应用启动。也可以对已运行的
+容器单独执行 `docker compose exec app python -m scripts.index_knowledge`。
+
 ### 方式二：本地运行
 
 依赖：Python 3.14、Node 20+、一个 PostgreSQL 16 + PGVector 实例。
@@ -51,7 +62,8 @@ cp .env.example .env              # 修改 DATABASE_URL
 
 alembic upgrade head
 MOCK_PROVIDERS=1 python -m scripts.seed_demo
-# 只灌业务数据、暂不索引 10 份大 PDF：SEED_INDEX_KNOWLEDGE=0 python -m scripts.seed_demo
+# 默认索引 8 份演示 Markdown；需要完整 PDF 时再执行：
+MOCK_PROVIDERS=1 python -m scripts.index_knowledge
 python -m scripts.serve --host 127.0.0.1 --port 8000   # 后端 :8000（无需 --reload）
 
 cd frontend
@@ -109,6 +121,8 @@ Proactor 事件循环与异步 psycopg 不兼容）。不需要 `--reload`；修
 | `SENTINEL_ENABLED` | `1` | 回答生成后的异步事实/承诺哨兵，异常时 fail-open |
 | `SEMANTIC_CACHE_ENABLED` | `1` | 人工导入 FAQ 的语义缓存，动态订单/价格/库存问题自动跳过 |
 | `STREAM_RETRY_ENABLED` | `1` | 流式首 token 前失败自动重试；已出 token 后改为非流式重生成并替换气泡 |
+| `SEED_DEMO_KNOWLEDGE` | `1` | 启动时索引仓库内 8 份小型 Markdown 演示知识 |
+| `SEED_INDEX_KNOWLEDGE` | `0` | 启动时额外索引完整 PDF；缺少 PDF 只告警，不阻断启动 |
 
 ## 功能细节：SSE、哨兵、拍照退换货与语义缓存
 
@@ -239,7 +253,7 @@ app/             FastAPI 应用
   graph/         LangGraph 节点、路由、状态与工具规划
   prompts/       回答、路由、工具规划、闲聊 Prompt
   providers/     对话/向量/重排/Mock Provider
-  rag/           父子块检索、PDF 抽取、索引
+  rag/           父子块检索、Markdown/PDF 抽取、索引
   schemas/       Pydantic 契约
   services/      聊天、工单、售后、知识库、哨兵、评价
   tools/         只读工具与运行时

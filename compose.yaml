@@ -40,8 +40,11 @@ services:
       SEMANTIC_CACHE_ENABLED: "${SEMANTIC_CACHE_ENABLED:-1}"
       SEMANTIC_CACHE_SIMILARITY: "${SEMANTIC_CACHE_SIMILARITY:-0.95}"
       SEMANTIC_CACHE_EMBEDDING_MODEL: "${SEMANTIC_CACHE_EMBEDDING_MODEL:-}"
+      SEED_DEMO_KNOWLEDGE: "${SEED_DEMO_KNOWLEDGE:-1}"
+      SEED_INDEX_KNOWLEDGE: "${SEED_INDEX_KNOWLEDGE:-0}"
     volumes:
       - ./models:/app/models:ro
+      - ./data/knowledge/pdf_sources:/app/data/knowledge/pdf_sources:ro
       - return_images:/app/data/return_images
     ports:
       - "8000:8000"
